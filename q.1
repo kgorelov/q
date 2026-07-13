@@ -1,0 +1,70 @@
+.TH Q 1 "July 2026" "q 0.1.0" "User Commands"
+.SH NAME
+q \- command line queue and execution tool
+.SH SYNOPSIS
+.B q
+.RB [ \-l | \-\-list ]
+.br
+.B q
+.RB [ \-k | \-\-kill ]
+.I job_id
+.br
+.B q
+.RB [ \-L | \-\-logs ]
+.I job_id
+.br
+.B q
+.I command
+.RI [ args... ]
+.br
+.B q
+.RB [ \-h | \-\-help ]
+.SH DESCRIPTION
+.B q
+is a lightweight utility that queues command execution and runs jobs in parallel in the background, managed by a background daemon
+.BR qdaemon .
+If the daemon is not running when a command is queued or listed, the client starts it automatically.
+.SH OPTIONS
+.TP
+.BR \-l ", " \-\-list
+List all jobs currently in the queue, including their ID, status, PID, start time, elapsed duration, and command. This is the default behavior if no arguments are provided.
+.TP
+.BR \-k ", " \-\-kill " \fIjob_id\fR"
+Kill a running job or cancel a queued job.
+.TP
+.BR \-L ", " \-\-logs " \fIjob_id\fR"
+Print the captured standard output (stdout) and standard error (stderr) of the specified job.
+.TP
+.BR \-h ", " \-\-help
+Print a summary of command usage and options.
+.SH CONFIGURATION
+The daemon reads its configuration from a TOML file. The path is searched in the following order:
+.IP 1.
+.I $XDG_CONFIG_HOME/q/q.conf
+(usually
+.IR ~/.config/q/q.conf )
+.IP 2.
+.I ~/.q/q.conf
+.PP
+The configuration options are:
+.TP
+.B max_parallel_jobs
+The maximum number of jobs allowed to run concurrently (default is 2).
+.TP
+.B max_completed_jobs
+The maximum number of finished jobs retained in the history/spool directory (default is 50).
+.SH FILES
+.TP
+.I ~/.q/
+Directory containing daemon runtime state.
+.TP
+.I ~/.q/q.sock
+Unix domain socket used for client-daemon communication.
+.TP
+.I ~/.q/qdaemon.pid
+Process ID of the running daemon.
+.TP
+.I ~/.q/spool/
+Spool directory containing metadata and logs for each job.
+.SH AUTHORS
+Written by kgorelov.
