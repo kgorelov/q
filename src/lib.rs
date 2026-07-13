@@ -117,6 +117,8 @@ pub struct JobInfo {
     pub status: JobStatus,
     pub pid: Option<u32>,
     pub worker_pid: Option<u32>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -139,6 +141,8 @@ pub struct JobInfoShort {
     pub cmd: String,
     pub status: String,
     pub pid: Option<u32>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

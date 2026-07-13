@@ -243,40 +243,110 @@ fn get_status_priority(status: &str) -> usize {
     }
 }
 
+fn format_duration(seconds: i64) -> String {
+    if seconds < 0 {
+        return "0s".to_string();
+    }
+    let secs = seconds % 60;
+    let mins = (seconds / 60) % 60;
+    let hours = (seconds / 3600) % 24;
+    let days = seconds / 86400;
+
+    if days > 0 {
+        format!("{}d {}h {}m {}s", days, hours, mins, secs)
+    } else if hours > 0 {
+        format!("{}h {}m {}s", hours, mins, secs)
+    } else if mins > 0 {
+        format!("{}m {}s", mins, secs)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 fn print_jobs_table(jobs: &[JobInfoShort]) {
     let mut max_id_len = 6;
     let mut max_status_len = 8;
     let mut max_pid_len = 5;
+    let mut max_start_len = 10; // "START TIME" length
+    let mut max_time_len = 4; // "TIME" length
 
+    let mut formatted_jobs = Vec::new();
     for job in jobs {
+        let pid_str = job.pid.map(|p| p.to_string()).unwrap_or_default();
+
+        let start_str = if let Some(ref start_time) = job.start_time {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(start_time) {
+                dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
+            } else {
+                "--".to_string()
+            }
+        } else {
+            "--".to_string()
+        };
+
+        let duration_str = if let Some(ref start_time) = job.start_time {
+            if let Ok(start_dt) = chrono::DateTime::parse_from_rfc3339(start_time) {
+                let start_utc = start_dt.with_timezone(&chrono::Utc);
+                let end_utc = if let Some(ref end_time) = job.end_time {
+                    chrono::DateTime::parse_from_rfc3339(end_time)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|_| chrono::Utc::now())
+                } else {
+                    chrono::Utc::now()
+                };
+                let diff = end_utc.signed_duration_since(start_utc);
+                format_duration(diff.num_seconds())
+            } else {
+                "--".to_string()
+            }
+        } else {
+            "--".to_string()
+        };
+
         max_id_len = max_id_len.max(job.id.to_string().len());
         max_status_len = max_status_len.max(job.status.len());
-        max_pid_len = max_pid_len.max(job.pid.map(|p| p.to_string().len()).unwrap_or(0));
+        max_pid_len = max_pid_len.max(pid_str.len());
+        max_start_len = max_start_len.max(start_str.len());
+        max_time_len = max_time_len.max(duration_str.len());
+
+        formatted_jobs.push((
+            job.id,
+            job.status.clone(),
+            pid_str,
+            start_str,
+            duration_str,
+            job.cmd.clone(),
+        ));
     }
 
     println!(
-        "{:<id_width$}  {:<status_width$}  {:<pid_width$}  {}",
-        "JOB ID", "STATUS", "PID", "COMMAND",
+        "{:<id_width$}  {:<status_width$}  {:<pid_width$}  {:<start_width$}  {:<time_width$}  {}",
+        "JOB ID", "STATUS", "PID", "START TIME", "TIME", "COMMAND",
         id_width = max_id_len,
         status_width = max_status_len,
-        pid_width = max_pid_len
+        pid_width = max_pid_len,
+        start_width = max_start_len,
+        time_width = max_time_len
     );
     println!(
-        "{:-<id_width$}--{:-<status_width$}--{:-<pid_width$}--{:-<20}",
-        "", "", "", "",
+        "{:-<id_width$}--{:-<status_width$}--{:-<pid_width$}--{:-<start_width$}--{:-<time_width$}--{:-<20}",
+        "", "", "", "", "", "",
         id_width = max_id_len,
         status_width = max_status_len,
-        pid_width = max_pid_len
+        pid_width = max_pid_len,
+        start_width = max_start_len,
+        time_width = max_time_len
     );
 
-    for job in jobs {
-        let pid_str = job.pid.map(|p| p.to_string()).unwrap_or_default();
+    for (id, status, pid_str, start_str, duration_str, cmd) in formatted_jobs {
         println!(
-            "{:<id_width$}  {:<status_width$}  {:<pid_width$}  {}",
-            job.id, job.status, pid_str, job.cmd,
+            "{:<id_width$}  {:<status_width$}  {:<pid_width$}  {:<start_width$}  {:<time_width$}  {}",
+            id, status, pid_str, start_str, duration_str, cmd,
             id_width = max_id_len,
             status_width = max_status_len,
-            pid_width = max_pid_len
+            pid_width = max_pid_len,
+            start_width = max_start_len,
+            time_width = max_time_len
         );
     }
 }

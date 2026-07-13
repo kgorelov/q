@@ -89,12 +89,28 @@ fn read_job_info(spool_dir: &Path, id: usize) -> Option<JobInfo> {
         None
     };
 
+    let start_time_path = job_dir.join("start_time");
+    let start_time = if start_time_path.exists() {
+        fs::read_to_string(&start_time_path).ok().map(|s| s.trim().to_string())
+    } else {
+        None
+    };
+
+    let end_time_path = job_dir.join("end_time");
+    let end_time = if end_time_path.exists() {
+        fs::read_to_string(&end_time_path).ok().map(|s| s.trim().to_string())
+    } else {
+        None
+    };
+
     Some(JobInfo {
         id,
         spec,
         status,
         pid,
         worker_pid,
+        start_time,
+        end_time,
     })
 }
 
@@ -181,6 +197,8 @@ fn recover_and_monitor_jobs(spool_dir: &Path, tx: mpsc::Sender<()>) -> Vec<usize
             if !is_running {
                 let job_dir = spool_dir.join(job.id.to_string());
                 let _ = fs::write(job_dir.join("status"), "failed: process died while daemon was offline");
+                let end_time = chrono::Local::now().to_rfc3339();
+                let _ = fs::write(job_dir.join("end_time"), &end_time);
                 let _ = fs::remove_file(job_dir.join("pid"));
                 let _ = fs::remove_file(job_dir.join("worker_pid"));
             }
@@ -219,6 +237,8 @@ async fn run_queue_manager(
                     } else {
                         let job_dir = spool_dir.join(job.id.to_string());
                         let _ = fs::write(job_dir.join("status"), "failed: process died while daemon was offline");
+                        let end_time = chrono::Local::now().to_rfc3339();
+                        let _ = fs::write(job_dir.join("end_time"), &end_time);
                         let _ = fs::remove_file(job_dir.join("pid"));
                         let _ = fs::remove_file(job_dir.join("worker_pid"));
                     }
@@ -400,6 +420,8 @@ async fn handle_connection(
                         cmd: format!("{} {}", j.spec.cmd, j.spec.args.join(" ")),
                         status: j.status.to_string(),
                         pid: j.pid,
+                        start_time: j.start_time,
+                        end_time: j.end_time,
                     })
                     .collect();
                 Response::List { jobs: jobs_short }
@@ -442,6 +464,8 @@ async fn handle_connection(
                             }
 
                             let _ = fs::write(&status_path, "cancelled");
+                            let end_time = chrono::Local::now().to_rfc3339();
+                            let _ = fs::write(job_dir.join("end_time"), &end_time);
                             let _ = fs::remove_file(pid_path);
                             let _ = fs::remove_file(worker_pid_path);
 
@@ -544,15 +568,23 @@ fn run_worker(job_id: usize) {
         return;
     }
 
+    let start_time = chrono::Local::now().to_rfc3339();
+    let _ = fs::write(job_dir.join("start_time"), &start_time);
+
     let exit_status = match child.wait() {
         Ok(s) => s,
         Err(e) => {
             let _ = fs::write(&status_path, format!("failed: waiting on process failed: {}", e));
+            let end_time = chrono::Local::now().to_rfc3339();
+            let _ = fs::write(job_dir.join("end_time"), &end_time);
             let _ = fs::remove_file(&worker_pid_path);
             let _ = fs::remove_file(&pid_path);
             return;
         }
     };
+
+    let end_time = chrono::Local::now().to_rfc3339();
+    let _ = fs::write(job_dir.join("end_time"), &end_time);
 
     let status_str = if let Some(code) = exit_status.code() {
         format!("completed {}", code)
