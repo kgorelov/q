@@ -44,7 +44,7 @@ async fn main() {
         return;
     }
 
-    if first_arg == "--logs" {
+    if first_arg == "-L" || first_arg == "--logs" {
         if args.len() < 3 {
             eprintln!("Error: job ID is required.");
             eprintln!("Usage: q --logs <jobid>");
