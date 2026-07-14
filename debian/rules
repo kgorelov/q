@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+
+REAL_USER = $(firstword $(USER) $(LOGNAME) $(shell logname))
+REAL_HOME = $(shell getent passwd $(REAL_USER) | cut -d: -f6)
+export RUSTUP_HOME = $(REAL_HOME)/.rustup
+export CARGO_HOME = $(REAL_HOME)/.cargo
+export PATH := $(CARGO_HOME)/bin:$(PATH)
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	# No configure step needed for Cargo
+
+override_dh_auto_build:
+	make build
+
+override_dh_auto_install:
+	make install PREFIX=/usr DESTDIR=debian/q-cli

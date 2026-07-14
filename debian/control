@@ -1,0 +1,13 @@
+Source: q-cli
+Section: utils
+Priority: optional
+Maintainer: Kirill Gorelov <kgorelov@gmail.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc
+Standards-Version: 4.6.2
+
+Package: q-cli
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Command line queue and execution tool
+ q is a lightweight utility that queues command execution and runs jobs
+ in parallel in the background, managed by a background daemon.

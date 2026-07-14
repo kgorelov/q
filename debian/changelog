@@ -1,0 +1,5 @@
+q-cli (0.1.0) unstable; urgency=low
+
+  * Initial release with start time and duration tracking.
+
+ -- Kirill Gorelov <kgorelov@gmail.com>  Tue, 14 Jul 2026 00:39:40 +0100
