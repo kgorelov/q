@@ -1,11 +1,42 @@
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use q::{
-    get_socket_path, get_spool_dir, JobInfoShort, Request, Response,
+    get_spool_dir, connect_daemon, ConnectionStream, JobInfoShort, Request, Response,
 };
+
+#[cfg(windows)]
+const DAEMON_BIN: &str = "qdaemon.exe";
+#[cfg(not(windows))]
+const DAEMON_BIN: &str = "qdaemon";
+
+#[cfg(unix)]
+fn spawn_daemon(daemon_exe: &Path) -> std::io::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        std::process::Command::new(daemon_exe)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            })
+            .spawn()
+    }
+}
+
+#[cfg(windows)]
+fn spawn_daemon(daemon_exe: &Path) -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new(daemon_exe)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .spawn()
+}
 
 #[tokio::main]
 async fn main() {
@@ -81,46 +112,31 @@ fn print_help() {
     println!("  -h, --help        Show this help message");
 }
 
-async fn connect_or_start_daemon() -> UnixStream {
-    let socket_path = get_socket_path();
-
-    if socket_path.exists() {
-        if let Ok(stream) = UnixStream::connect(&socket_path).await {
-            return stream;
-        }
+async fn connect_or_start_daemon() -> ConnectionStream {
+    if let Ok(stream) = connect_daemon().await {
+        return stream;
     }
 
     // Daemon is not running, let's start it
     let current_exe = std::env::current_exe().ok();
     let daemon_exe = current_exe
         .as_ref()
-        .map(|p| p.parent().unwrap().join("qdaemon"))
+        .map(|p| p.parent().unwrap().join(DAEMON_BIN))
         .filter(|p| p.exists())
-        .unwrap_or_else(|| PathBuf::from("qdaemon"));
+        .unwrap_or_else(|| PathBuf::from(DAEMON_BIN));
 
     println!("Starting qdaemon...");
-    use std::os::unix::process::CommandExt;
-    let spawn_result = unsafe {
-        std::process::Command::new(&daemon_exe)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            })
-            .spawn()
-    };
+    let spawn_result = spawn_daemon(&daemon_exe);
     match spawn_result {
         Ok(_) => {
             // Poll socket to wait for daemon to start listening
             for _ in 0..60 {
-                if let Ok(stream) = UnixStream::connect(&socket_path).await {
+                if let Ok(stream) = connect_daemon().await {
                     return stream;
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
-            eprintln!("Error: daemon started but socket did not become available.");
+            eprintln!("Error: daemon started but connection did not become available.");
             std::process::exit(1);
         }
         Err(e) => {

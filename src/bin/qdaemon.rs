@@ -2,10 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 use q::{
-    get_spool_dir, load_config,
+    get_spool_dir, load_config, ConnectionListener, ConnectionStream,
     JobInfo, JobInfoShort, JobSpec, JobStatus, Request, Response,
 };
 
@@ -21,6 +20,7 @@ async fn main() {
     run_daemon().await;
 }
 
+#[cfg(unix)]
 fn is_worker_pid_running(pid: u32) -> bool {
     let comm_path = format!("/proc/{}/comm", pid);
     if let Ok(comm) = fs::read_to_string(comm_path) {
@@ -29,6 +29,82 @@ fn is_worker_pid_running(pid: u32) -> bool {
         false
     }
 }
+
+#[cfg(windows)]
+fn is_worker_pid_running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, GetExitCodeProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use std::os::windows::ffi::OsStringExt;
+    use std::ffi::OsString;
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if handle == 0 {
+            return false;
+        }
+
+        let mut exit_code = 0;
+        let res_exit = GetExitCodeProcess(handle, &mut exit_code);
+        if res_exit != 0 && exit_code != STILL_ACTIVE as u32 {
+            CloseHandle(handle);
+            return false;
+        }
+
+        let mut len = 1024;
+        let mut buf = vec![0u16; 1024];
+        let res = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
+        CloseHandle(handle);
+
+        if res != 0 {
+            let path_os = OsString::from_wide(&buf[..len as usize]);
+            if let Some(path_str) = path_os.to_str() {
+                let lower = path_str.to_lowercase();
+                return lower.ends_with("qdaemon.exe");
+            }
+        }
+        false
+    }
+}
+
+#[cfg(unix)]
+fn kill_process(pid: u32) {
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn kill_process(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle != 0 {
+            TerminateProcess(handle, 1);
+            CloseHandle(handle);
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signals() {
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).unwrap();
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+
+    tokio::select! {
+        _ = sigint.recv() => {}
+        _ = sigterm.recv() => {}
+    }
+}
+
+#[cfg(windows)]
+async fn wait_for_shutdown_signals() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 
 fn scan_jobs(spool_dir: &Path) -> Vec<JobInfo> {
     let mut jobs = Vec::new();
@@ -284,18 +360,22 @@ async fn run_queue_manager(
 async fn run_daemon() {
     let q_dir = q::get_q_dir();
     let spool_dir = q::get_spool_dir();
-    let socket_path = q::get_socket_path();
     let pid_path = q::get_daemon_pid_path();
+
+    #[cfg(unix)]
+    let lock_file_path = q::get_socket_path();
+    #[cfg(windows)]
+    let lock_file_path = q::get_port_path();
 
     let _ = fs::create_dir_all(&q_dir);
     let _ = fs::create_dir_all(&spool_dir);
 
-    if socket_path.exists() {
-        if tokio::net::UnixStream::connect(&socket_path).await.is_ok() {
+    if lock_file_path.exists() {
+        if q::connect_daemon().await.is_ok() {
             eprintln!("qdaemon is already running.");
             std::process::exit(1);
         } else {
-            let _ = fs::remove_file(&socket_path);
+            let _ = fs::remove_file(&lock_file_path);
         }
     }
 
@@ -310,10 +390,10 @@ async fn run_daemon() {
     let active_orphans = recover_and_monitor_jobs(&spool_dir, tx.clone());
     println!("Recovered {} running orphaned jobs", active_orphans.len());
 
-    let listener = match UnixListener::bind(&socket_path) {
+    let listener = match ConnectionListener::bind().await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("Failed to bind to socket: {}", e);
+            eprintln!("Failed to bind: {}", e);
             let _ = fs::remove_file(&pid_path);
             std::process::exit(1);
         }
@@ -325,29 +405,22 @@ async fn run_daemon() {
         run_queue_manager(spool_dir_clone, tx_clone, rx).await;
     });
 
-    let socket_path_cleanup = socket_path.clone();
+    let lock_file_path_cleanup = lock_file_path.clone();
     let pid_path_cleanup = pid_path.clone();
     tokio::spawn(async move {
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).unwrap();
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
-
-        tokio::select! {
-            _ = sigint.recv() => {}
-            _ = sigterm.recv() => {}
-        }
-
+        wait_for_shutdown_signals().await;
         println!("Shutting down daemon...");
-        let _ = fs::remove_file(&socket_path_cleanup);
+        let _ = fs::remove_file(&lock_file_path_cleanup);
         let _ = fs::remove_file(&pid_path_cleanup);
         std::process::exit(0);
     });
 
-    println!("qdaemon started and listening on {:?}", socket_path);
+    println!("qdaemon started and listening on {:?}", lock_file_path);
     let _ = tx.send(()).await;
 
     loop {
         match listener.accept().await {
-            Ok((stream, _)) => {
+            Ok(stream) => {
                 let spool_dir = spool_dir.clone();
                 let tx = tx.clone();
                 tokio::spawn(async move {
@@ -362,11 +435,11 @@ async fn run_daemon() {
 }
 
 async fn handle_connection(
-    mut stream: tokio::net::UnixStream,
+    stream: ConnectionStream,
     spool_dir: PathBuf,
     tx: mpsc::Sender<()>,
 ) {
-    let (reader, mut writer) = stream.split();
+    let (reader, mut writer) = tokio::io::split(stream);
     let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
 
@@ -453,14 +526,10 @@ async fn handle_connection(
                                 .and_then(|s| s.trim().parse::<u32>().ok());
 
                             if let Some(w) = wpid {
-                                unsafe {
-                                    libc::kill(w as libc::pid_t, libc::SIGKILL);
-                                }
+                                kill_process(w);
                             }
                             if let Some(p) = pid {
-                                unsafe {
-                                    libc::kill(p as libc::pid_t, libc::SIGKILL);
-                                }
+                                kill_process(p);
                             }
 
                             let _ = fs::write(&status_path, "cancelled");

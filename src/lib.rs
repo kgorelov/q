@@ -35,6 +35,80 @@ pub fn get_daemon_pid_path() -> PathBuf {
     get_q_dir().join("qdaemon.pid")
 }
 
+pub fn get_port_path() -> PathBuf {
+    get_q_dir().join("q.port")
+}
+
+#[cfg(unix)]
+pub type ConnectionStream = tokio::net::UnixStream;
+
+#[cfg(windows)]
+pub type ConnectionStream = tokio::net::TcpStream;
+
+#[cfg(unix)]
+pub async fn connect_daemon() -> std::io::Result<ConnectionStream> {
+    let socket_path = get_socket_path();
+    tokio::net::UnixStream::connect(&socket_path).await
+}
+
+#[cfg(windows)]
+pub async fn connect_daemon() -> std::io::Result<ConnectionStream> {
+    let port_path = get_port_path();
+    if !port_path.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Port file not found",
+        ));
+    }
+    let content = fs::read_to_string(&port_path)?;
+    let port: u16 = content
+        .trim()
+        .parse()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    tokio::net::TcpStream::connect(("127.0.0.1", port)).await
+}
+
+#[cfg(unix)]
+pub struct ConnectionListener {
+    inner: tokio::net::UnixListener,
+}
+
+#[cfg(unix)]
+impl ConnectionListener {
+    pub async fn bind() -> std::io::Result<Self> {
+        let socket_path = get_socket_path();
+        let inner = tokio::net::UnixListener::bind(&socket_path)?;
+        Ok(Self { inner })
+    }
+
+    pub async fn accept(&self) -> std::io::Result<ConnectionStream> {
+        let (stream, _) = self.inner.accept().await?;
+        Ok(stream)
+    }
+}
+
+#[cfg(windows)]
+pub struct ConnectionListener {
+    inner: tokio::net::TcpListener,
+}
+
+#[cfg(windows)]
+impl ConnectionListener {
+    pub async fn bind() -> std::io::Result<Self> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let port_path = get_port_path();
+        fs::write(&port_path, port.to_string())?;
+        Ok(Self { inner: listener })
+    }
+
+    pub async fn accept(&self) -> std::io::Result<ConnectionStream> {
+        let (stream, _) = self.inner.accept().await?;
+        Ok(stream)
+    }
+}
+
+
 pub fn get_config_path() -> PathBuf {
     dirs::config_dir()
         .map(|p| p.join("q").join("q.conf"))
