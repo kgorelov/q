@@ -461,13 +461,13 @@ async fn handle_connection(
         };
 
         let response = match req {
-            Request::Queue { cmd, args, work_dir, env } => {
+            Request::Queue { cmd, args, work_dir, env, notify } => {
                 let job_id = get_next_job_id(&spool_dir);
                 let job_dir = spool_dir.join(job_id.to_string());
                 if let Err(e) = fs::create_dir_all(&job_dir) {
                     Response::Error { message: format!("Failed to create job directory: {}", e) }
                 } else {
-                    let spec = JobSpec { cmd, args, work_dir, env };
+                    let spec = JobSpec { cmd, args, work_dir, env, notify };
                     let spec_path = job_dir.join("spec.json");
                     let status_path = job_dir.join("status");
 
@@ -661,7 +661,29 @@ fn run_worker(job_id: usize) {
         "failed: killed by signal".to_string()
     };
 
-    let _ = fs::write(&status_path, status_str);
+    let _ = fs::write(&status_path, &status_str);
     let _ = fs::remove_file(&worker_pid_path);
     let _ = fs::remove_file(&pid_path);
+
+    let config = load_config();
+    let duration_secs = if let (Ok(s), Ok(e)) = (
+        chrono::DateTime::parse_from_rfc3339(&start_time),
+        chrono::DateTime::parse_from_rfc3339(&end_time),
+    ) {
+        e.signed_duration_since(s).num_seconds().max(0) as u64
+    } else {
+        0
+    };
+
+    let should_notify = match spec.notify {
+        Some(explicit) => explicit,
+        None => config.enable_notifications && duration_secs >= config.min_notify_duration_secs,
+    };
+
+    if should_notify {
+        let cmd_line = format!("{} {}", spec.cmd, spec.args.join(" "));
+        let summary = format!("Job #{} {}", job_id, status_str);
+        let body = format!("Command: {}\nDuration: {}s", cmd_line, duration_secs);
+        q::send_notification(&summary, &body);
+    }
 }

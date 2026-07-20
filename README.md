@@ -37,7 +37,7 @@ You can copy these binaries into your `PATH` (e.g., `/usr/local/bin/`).
 
 ```bash
 q [options]
-q <command> [args...]
+q [notification-options] <command> [args...]
 ```
 
 ### Options
@@ -47,6 +47,8 @@ q <command> [args...]
 | `-l`, `--list` | Lists all queued, running, and completed jobs (default behavior). |
 | `-k`, `--kill <id>` | Kills a running job or cancels a queued job. |
 | `-L`, `--logs <id>` | Prints the captured stdout and stderr logs for a job. |
+| `-n`, `--notify` | Force desktop notification on job completion. |
+| `--no-notify` | Disable desktop notification for job completion. |
 | `-h`, `--help` | Prints the help message. |
 
 ### Examples
@@ -57,7 +59,13 @@ q <command> [args...]
    q cargo build --release
    ```
 
-2. **List jobs**:
+2. **Force or suppress desktop notifications**:
+   ```bash
+   q --notify sleep 3
+   q --no-notify long_script.sh
+   ```
+
+3. **List jobs**:
    ```bash
    q
    ```
@@ -70,12 +78,12 @@ q <command> [args...]
    17      completed (0)          2026-07-13 23:21:36  5s    sleep 5
    ```
 
-3. **View logs**:
+4. **View logs**:
    ```bash
    q --logs 16
    ```
 
-4. **Kill a job**:
+5. **Kill a job**:
    ```bash
    q --kill 18
    ```
@@ -100,6 +108,13 @@ max_parallel_jobs = 3
 
 # Maximum number of finished jobs to keep in history before deleting old records
 max_completed_jobs = 50
+
+# Enable desktop notifications for long-running commands (default: true)
+# Uses D-Bus on Linux/Unix and Windows Toast Notifications on Windows
+enable_notifications = true
+
+# Minimum duration in seconds a command must run before triggering a completion notification (default: 10)
+min_notify_duration_secs = 10
 ```
 
 ---

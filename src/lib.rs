@@ -2,10 +2,22 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_min_notify_duration() -> u64 {
+    10
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
     pub max_parallel_jobs: usize,
     pub max_completed_jobs: usize,
+    #[serde(default = "default_true")]
+    pub enable_notifications: bool,
+    #[serde(default = "default_min_notify_duration")]
+    pub min_notify_duration_secs: u64,
 }
 
 impl Default for Config {
@@ -13,6 +25,8 @@ impl Default for Config {
         Self {
             max_parallel_jobs: 2,
             max_completed_jobs: 50,
+            enable_notifications: true,
+            min_notify_duration_secs: 10,
         }
     }
 }
@@ -108,7 +122,6 @@ impl ConnectionListener {
     }
 }
 
-
 pub fn get_config_path() -> PathBuf {
     dirs::config_dir()
         .map(|p| p.join("q").join("q.conf"))
@@ -125,6 +138,18 @@ pub fn load_config() -> Config {
         }
     }
     Config::default()
+}
+
+pub fn send_notification(summary: &str, body: &str) {
+    let result = notify_rust::Notification::new()
+        .appname("q")
+        .summary(summary)
+        .body(body)
+        .icon("utilities-terminal")
+        .show();
+    if let Err(e) = result {
+        eprintln!("Failed to send desktop notification: {}", e);
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -182,6 +207,8 @@ pub struct JobSpec {
     pub args: Vec<String>,
     pub work_dir: String,
     pub env: Vec<(String, String)>,
+    #[serde(default)]
+    pub notify: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -202,6 +229,8 @@ pub enum Request {
         args: Vec<String>,
         work_dir: String,
         env: Vec<(String, String)>,
+        #[serde(default)]
+        notify: Option<bool>,
     },
     List,
     Kill {
@@ -226,3 +255,50 @@ pub enum Response {
     List { jobs: Vec<JobInfoShort> },
     Error { message: String },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_defaults() {
+        let toml_str = r#"
+            max_parallel_jobs = 4
+            max_completed_jobs = 100
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.max_parallel_jobs, 4);
+        assert_eq!(config.max_completed_jobs, 100);
+        assert!(config.enable_notifications);
+        assert_eq!(config.min_notify_duration_secs, 10);
+    }
+
+    #[test]
+    fn test_config_custom_notification_settings() {
+        let toml_str = r#"
+            max_parallel_jobs = 2
+            max_completed_jobs = 50
+            enable_notifications = false
+            min_notify_duration_secs = 5
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.enable_notifications);
+        assert_eq!(config.min_notify_duration_secs, 5);
+    }
+
+    #[test]
+    fn test_job_spec_backward_compatibility() {
+        let json_str = r#"{"cmd":"sleep","args":["5"],"work_dir":".","env":[]}"#;
+        let spec: JobSpec = serde_json::from_str(json_str).unwrap();
+        assert_eq!(spec.cmd, "sleep");
+        assert_eq!(spec.notify, None);
+    }
+
+    #[test]
+    fn test_job_spec_with_notify() {
+        let json_str = r#"{"cmd":"sleep","args":["5"],"work_dir":".","env":[],"notify":true}"#;
+        let spec: JobSpec = serde_json::from_str(json_str).unwrap();
+        assert_eq!(spec.notify, Some(true));
+    }
+}
+

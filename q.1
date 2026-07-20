@@ -35,6 +35,12 @@ Kill a running job or cancel a queued job.
 .BR \-L ", " \-\-logs " \fIjob_id\fR"
 Print the captured standard output (stdout) and standard error (stderr) of the specified job.
 .TP
+.BR \-n ", " \-\-notify
+Force sending a desktop notification when the queued command finishes, regardless of its duration.
+.TP
+.BR \-\-no\-notify
+Disable desktop notification for the queued command when it finishes.
+.TP
 .BR \-h ", " \-\-help
 Print a summary of command usage and options.
 .SH CONFIGURATION
@@ -53,6 +59,12 @@ The maximum number of jobs allowed to run concurrently (default is 2).
 .TP
 .B max_completed_jobs
 The maximum number of finished jobs retained in the history/spool directory (default is 50).
+.TP
+.B enable_notifications
+Boolean flag to enable or disable desktop notifications globally (default is true). Uses D-Bus on Linux/Unix and Toast Notifications on Windows.
+.TP
+.B min_notify_duration_secs
+Minimum execution duration in seconds required for a completed command to trigger a desktop notification (default is 10).
 .SH FILES
 .TP
 .I ~/.q/

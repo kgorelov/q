@@ -46,56 +46,66 @@ async fn main() {
         return;
     }
 
-    let first_arg = &args[1];
+    let mut notify_override: Option<bool> = None;
+    let mut idx = 1;
 
-    if first_arg == "-h" || first_arg == "--help" {
-        print_help();
-        return;
+    while idx < args.len() {
+        let arg = &args[idx];
+        if arg == "-h" || arg == "--help" {
+            print_help();
+            return;
+        } else if arg == "-l" || arg == "--list" {
+            handle_list().await;
+            return;
+        } else if arg == "-k" || arg == "--kill" {
+            if idx + 1 >= args.len() {
+                eprintln!("Error: job ID is required.");
+                eprintln!("Usage: q --kill <jobid>");
+                std::process::exit(1);
+            }
+            let job_id: usize = match args[idx + 1].parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    eprintln!("Error: invalid job ID '{}'", args[idx + 1]);
+                    std::process::exit(1);
+                }
+            };
+            handle_kill(job_id).await;
+            return;
+        } else if arg == "-L" || arg == "--logs" {
+            if idx + 1 >= args.len() {
+                eprintln!("Error: job ID is required.");
+                eprintln!("Usage: q --logs <jobid>");
+                std::process::exit(1);
+            }
+            let job_id: usize = match args[idx + 1].parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    eprintln!("Error: invalid job ID '{}'", args[idx + 1]);
+                    std::process::exit(1);
+                }
+            };
+            handle_logs(job_id);
+            return;
+        } else if arg == "-n" || arg == "--notify" {
+            notify_override = Some(true);
+            idx += 1;
+        } else if arg == "--no-notify" {
+            notify_override = Some(false);
+            idx += 1;
+        } else {
+            break;
+        }
     }
 
-    if first_arg == "-l" || first_arg == "--list" {
+    if idx >= args.len() {
         handle_list().await;
         return;
     }
 
-    if first_arg == "-k" || first_arg == "--kill" {
-        if args.len() < 3 {
-            eprintln!("Error: job ID is required.");
-            eprintln!("Usage: q --kill <jobid>");
-            std::process::exit(1);
-        }
-        let job_id: usize = match args[2].parse() {
-            Ok(id) => id,
-            Err(_) => {
-                eprintln!("Error: invalid job ID '{}'", args[2]);
-                std::process::exit(1);
-            }
-        };
-        handle_kill(job_id).await;
-        return;
-    }
-
-    if first_arg == "-L" || first_arg == "--logs" {
-        if args.len() < 3 {
-            eprintln!("Error: job ID is required.");
-            eprintln!("Usage: q --logs <jobid>");
-            std::process::exit(1);
-        }
-        let job_id: usize = match args[2].parse() {
-            Ok(id) => id,
-            Err(_) => {
-                eprintln!("Error: invalid job ID '{}'", args[2]);
-                std::process::exit(1);
-            }
-        };
-        handle_logs(job_id);
-        return;
-    }
-
-    // Otherwise, queue a command
-    let cmd = first_arg.clone();
-    let cmd_args = args[2..].to_vec();
-    handle_queue(cmd, cmd_args).await;
+    let cmd = args[idx].clone();
+    let cmd_args = args[idx + 1..].to_vec();
+    handle_queue(cmd, cmd_args, notify_override).await;
 }
 
 fn print_help() {
@@ -103,12 +113,14 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  q [options]");
-    println!("  q <command> [args...]");
+    println!("  q [notification-options] <command> [args...]");
     println!();
     println!("Options:");
     println!("  -l, --list        List all queued, running, and completed jobs");
     println!("  -k, --kill <id>   Kill a running job or cancel a queued job");
-    println!("  --logs <id>       Print stdout and stderr of a job");
+    println!("  -L, --logs <id>   Print stdout and stderr of a job");
+    println!("  -n, --notify      Force desktop notification on job completion");
+    println!("  --no-notify       Disable desktop notification for job completion");
     println!("  -h, --help        Show this help message");
 }
 
@@ -146,7 +158,7 @@ async fn connect_or_start_daemon() -> ConnectionStream {
     }
 }
 
-async fn handle_queue(cmd: String, args: Vec<String>) {
+async fn handle_queue(cmd: String, args: Vec<String>, notify: Option<bool>) {
     let mut stream = connect_or_start_daemon().await;
 
     let work_dir = std::env::current_dir()
@@ -154,7 +166,7 @@ async fn handle_queue(cmd: String, args: Vec<String>) {
         .unwrap_or_else(|_| ".".to_string());
     let env: Vec<(String, String)> = std::env::vars().collect();
 
-    let req = Request::Queue { cmd, args, work_dir, env };
+    let req = Request::Queue { cmd, args, work_dir, env, notify };
     let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
 
     if let Err(e) = stream.write_all(req_str.as_bytes()).await {
