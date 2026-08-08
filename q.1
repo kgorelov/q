@@ -34,12 +34,21 @@ q, schedule \- command line queue, execution, and scheduling tool
 .br
 .B q
 .RB [ \-s | \-\-schedule ]
-.RB [ \-r | \-\-reschedule ]
+.RB [ \-r | \-\-run ]
+.I schedule_id
+.br
+.B q
+.RB [ \-r | \-\-run ]
+.I schedule_id
+.br
+.B q
+.RB [ \-s | \-\-schedule ]
+.RB [ \-\-reschedule ]
 .I schedule_id
 .I timespec
 .br
 .B q
-.RB [ \-r | \-\-reschedule ]
+.RB [ \-\-reschedule ]
 .I schedule_id
 .I timespec
 .br
@@ -65,7 +74,11 @@ q, schedule \- command line queue, execution, and scheduling tool
 .I schedule_id
 .br
 .B schedule
-.RB [ \-r | \-\-reschedule ]
+.RB [ \-r | \-\-run ]
+.I schedule_id
+.br
+.B schedule
+.RB [ \-\-reschedule ]
 .I schedule_id
 .I timespec
 .br
@@ -108,15 +121,18 @@ Disable a scheduled command. When disabled, the command will not be triggered an
 .BR \-e ", " \-\-enable " \fIid\fR"
 Enable a previously disabled scheduled command, restoring its normal schedule calculation in the \fBNEXT RUN\fR column.
 .TP
-.BR \-r ", " \-\-reschedule " \fIid\fR \fItimespec\fR"
-Change the schedule timespec of an existing scheduled command with ID \fIid\fR to a new timespec. Implies \fB\-\-schedule\fR.
+.BR \-r ", " \-\-run " \fIid\fR"
+Immediately triggers/runs the scheduled command with the specified ID.
+.TP
+.BR \-\-reschedule " \fIid\fR \fItimespec\fR"
+Change the schedule timespec of an existing scheduled command with ID \fIid\fR to a new timespec.
 .TP
 .BR \-L ", " \-\-logs " \fIjob_id\fR"
 Print the captured standard output (stdout) and standard error (stderr) of the specified job.
 .TP
 .BR \-s ", " \-\-schedule
 Enable scheduling mode. When followed by a timespec and a command, schedules the command for periodic or cron execution. When used without a command or with
-.BR \-l ", lists scheduled commands. When used with " \-k ", " \-d ", " \-e ", or " \-r ,
+.BR \-l ", lists scheduled commands. When used with " \-k ", " \-d ", " \-e ", " \-r ", or " \-\-reschedule ,
 manages scheduled commands.
 .TP
 .BR \-n ", " \-\-notify

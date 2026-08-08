@@ -300,6 +300,9 @@ pub enum Request {
         schedule_id: usize,
         timespec: String,
     },
+    ScheduleRun {
+        schedule_id: usize,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -31,6 +31,7 @@ schedule -e <jobid>
 When a scheduled command is enabled, it must indicate a proper schedule time to run in the "NEXT RUN" field.
 
 ** DONE Recalculate NEXT RUN on re-enabling commands
+** DONE Immediate run command
 ** TODO Color coding in the terminal
 q output:
   - running command: yellow

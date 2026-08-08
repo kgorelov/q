@@ -11,7 +11,8 @@ If the daemon is not running when you interact with `q` or `schedule`, the clien
 - **Background Queueing**: Queue commands to run asynchronously in the background.
 - **Parallel Execution**: Execute multiple jobs concurrently, up to a configurable limit.
 - **Asynchronous Userland Cron & Scheduler**: Schedule commands with cron expressions, human-readable times (`Wed 10 am`, `weekdays at 8:00 am`), or periodic intervals (`every 5 hours`, `30m`).
-- **Reschedule Existing Commands**: Change the timespec of an existing scheduled job on the fly with `--reschedule` / `-r`.
+- **Run Scheduled Commands Immediately**: Run any scheduled command on demand with `--run` / `-r <id>`.
+- **Reschedule Existing Commands**: Change the timespec of an existing scheduled job on the fly with `--reschedule <id> <ts>` or `-r <id> <ts>`.
 - **Disable & Enable Schedules**: Temporarily disable any scheduled command with `--disable` / `-d` and re-enable it with `--enable` / `-e`.
 - **Power-Off Catch-Up**: Asynchronous catch-up ensures scheduled jobs that were missed while the machine was turned off or asleep run when the daemon resumes.
 - **Start Time & Duration Tracking**: Keep track of start time, duration, and elapsed time since last run.
@@ -57,11 +58,18 @@ q -s, --schedule <timespec> <command> [args...]
 schedule [schedule-options]
 schedule <timespec> <command> [args...]
 
+# Run a scheduled command immediately:
+schedule --run <jobid>
+schedule -r <jobid>
+q --schedule --run <jobid>
+q --run <jobid>
+q -r <jobid>
+
 # Rescheduling a command:
-q --reschedule <jobid> <timespec>
-q -r <jobid> <timespec>
 schedule --reschedule <jobid> <timespec>
 schedule -r <jobid> <timespec>
+q --reschedule <jobid> <timespec>
+q -r <jobid> <timespec>
 ```
 
 ### Options
@@ -72,7 +80,8 @@ schedule -r <jobid> <timespec>
 | `-k`, `--kill <id>` | Kills a running job or cancels a queued job. |
 | `-L`, `--logs <id>` | Prints the captured stdout and stderr logs for a job. |
 | `-s`, `--schedule` | Enables scheduling mode. |
-| `-r`, `--reschedule <id> <ts>` | Changes the timespec of a scheduled command (implies `--schedule`). |
+| `-r`, `--run <id>` | Immediately triggers/runs the scheduled command with the specified ID. |
+| `--reschedule <id> <ts>` | Changes the timespec of a scheduled command. |
 | `-n`, `--notify` | Force desktop notification on job completion. |
 | `--no-notify` | Disable desktop notification for job completion. |
 | `-h`, `--help` | Prints the help message. |
@@ -85,7 +94,8 @@ schedule -r <jobid> <timespec>
 | `-k`, `--kill <id>` | Removes a scheduled command by ID. |
 | `-d`, `--disable <id>` | Disables a scheduled command (shows `DISABLED` in `NEXT RUN`). |
 | `-e`, `--enable <id>` | Enables a previously disabled scheduled command. |
-| `-r`, `--reschedule <id> <ts>` | Changes the timespec of an existing scheduled command. |
+| `-r`, `--run <id>` | Runs a scheduled command immediately. |
+| `--reschedule <id> <ts>` | Changes the timespec of an existing scheduled command. |
 | `<timespec> <cmd> [args...]` | Schedules a command for periodic or cron execution. |
 
 ---
@@ -164,13 +174,19 @@ The scheduler supports flexible timespec expressions:
    2   every 5 hours  2026-08-08 07:00:00  4h 50m   2026-08-08 12:00:00  sync_data.sh
    ```
 
-5. **Reschedule a command**:
+5. **Run a scheduled command immediately**:
    ```bash
-   schedule --reschedule 2 "every 2 hours"
-   # or: q -r 2 "every 2 hours"
+   schedule --run 1
+   # or: schedule -r 1
    ```
 
-6. **Disable and Enable scheduled commands**:
+6. **Reschedule a command**:
+   ```bash
+   schedule --reschedule 2 "every 2 hours"
+   # or: schedule -r 2 "every 2 hours"
+   ```
+
+7. **Disable and Enable scheduled commands**:
    ```bash
    # Disable schedule #1
    schedule --disable 1
@@ -190,14 +206,14 @@ The scheduler supports flexible timespec expressions:
    # or: q --schedule -e 1
    ```
 
-7. **Remove a scheduled command**:
+8. **Remove a scheduled command**:
    ```bash
    schedule --kill 1
    # or
    q --schedule -k 1
    ```
 
-8. **View logs & Kill jobs**:
+9. **View logs & Kill jobs**:
    ```bash
    q --logs 16
    q --kill 18

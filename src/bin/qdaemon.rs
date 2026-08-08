@@ -874,6 +874,53 @@ async fn handle_connection(
                     }
                 }
             }
+            Request::ScheduleRun { schedule_id } => {
+                let sched_dir = schedules_dir.join(schedule_id.to_string());
+                let spec_path = sched_dir.join("spec.json");
+                if !sched_dir.exists() || !spec_path.exists() {
+                    Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                } else {
+                    let spec_str = match fs::read_to_string(&spec_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
+                            if let Ok(resp_str) = serde_json::to_string(&resp) {
+                                let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
+                            }
+                            line.clear();
+                            continue;
+                        }
+                    };
+                    if let Ok(sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
+                        let job_id = get_next_job_id(&spool_dir);
+                        let job_dir = spool_dir.join(job_id.to_string());
+                        if let Err(e) = fs::create_dir_all(&job_dir) {
+                            Response::Error { message: format!("Failed to create job directory: {}", e) }
+                        } else {
+                            let job_spec = JobSpec {
+                                cmd: sched_spec.cmd.clone(),
+                                args: sched_spec.args.clone(),
+                                work_dir: sched_spec.work_dir.clone(),
+                                env: sched_spec.env.clone(),
+                                notify: sched_spec.notify,
+                            };
+                            let _ = fs::write(job_dir.join("spec.json"), serde_json::to_string(&job_spec).unwrap());
+                            let _ = fs::write(job_dir.join("status"), "queued");
+                            let cmd_str = format!("{} {}", job_spec.cmd, job_spec.args.join(" "));
+                            let _ = fs::write(job_dir.join("cmd"), cmd_str);
+
+                            let now_str = chrono::Local::now().to_rfc3339();
+                            let _ = fs::write(sched_dir.join("last_run"), &now_str);
+                            let _ = fs::write(sched_dir.join("last_job_id"), job_id.to_string());
+
+                            let _ = tx.send(()).await;
+                            Response::Queued { job_id }
+                        }
+                    } else {
+                        Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
+                    }
+                }
+            }
         };
 
         if let Ok(resp_str) = serde_json::to_string(&response) {
