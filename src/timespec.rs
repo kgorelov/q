@@ -211,6 +211,75 @@ impl TimeSpec {
     }
 }
 
+pub fn parse_word_number(s: &str) -> Option<u64> {
+    let s = s.trim().to_lowercase().replace('-', " ");
+    if let Ok(n) = s.parse::<u64>() {
+        return Some(n);
+    }
+
+    match s.as_str() {
+        "a" | "an" | "one" => Some(1),
+        "two" | "other" => Some(2),
+        "three" => Some(3),
+        "four" => Some(4),
+        "five" => Some(5),
+        "six" => Some(6),
+        "seven" => Some(7),
+        "eight" => Some(8),
+        "nine" => Some(9),
+        "ten" => Some(10),
+        "eleven" => Some(11),
+        "twelve" => Some(12),
+        "thirteen" => Some(13),
+        "fourteen" => Some(14),
+        "fifteen" => Some(15),
+        "sixteen" => Some(16),
+        "seventeen" => Some(17),
+        "eighteen" => Some(18),
+        "nineteen" => Some(19),
+        "twenty" => Some(20),
+        "thirty" => Some(30),
+        "forty" | "fourty" => Some(40),
+        "fifty" => Some(50),
+        "sixty" => Some(60),
+        "seventy" => Some(70),
+        "eighty" => Some(80),
+        "ninety" => Some(90),
+        "hundred" | "one hundred" => Some(100),
+        _ => {
+            let words: Vec<&str> = s.split_whitespace().collect();
+            if words.len() == 2 {
+                let tens = match words[0] {
+                    "twenty" => 20,
+                    "thirty" => 30,
+                    "forty" | "fourty" => 40,
+                    "fifty" => 50,
+                    "sixty" => 60,
+                    "seventy" => 70,
+                    "eighty" => 80,
+                    "ninety" => 90,
+                    _ => return None,
+                };
+                let units = match words[1] {
+                    "one" => 1,
+                    "two" => 2,
+                    "three" => 3,
+                    "four" => 4,
+                    "five" => 5,
+                    "six" => 6,
+                    "seven" => 7,
+                    "eight" => 8,
+                    "nine" => 9,
+                    _ => return None,
+                };
+                Some(tens + units)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 fn parse_field(
     field_str: &str,
     min_val: u8,
@@ -465,35 +534,42 @@ pub fn parse_interval_str(input: &str) -> Option<u64> {
     }
 
     match s.as_str() {
-        "second" | "1 second" | "1 sec" | "1s" => return Some(1),
-        "minute" | "1 minute" | "1 min" | "1m" => return Some(60),
-        "hour" | "1 hour" | "1 hr" | "1h" => return Some(3600),
-        "day" | "1 day" | "1d" => return Some(86400),
-        "week" | "1 week" | "1w" => return Some(604800),
+        "second" | "1 second" | "1 sec" | "1s" | "a second" | "an second" | "one second" => return Some(1),
+        "minute" | "1 minute" | "1 min" | "1m" | "a minute" | "one minute" => return Some(60),
+        "hour" | "1 hour" | "1 hr" | "1h" | "an hour" | "a hour" | "one hour" => return Some(3600),
+        "day" | "1 day" | "1d" | "a day" | "one day" => return Some(86400),
+        "week" | "1 week" | "1w" | "a week" | "one week" => return Some(604800),
+        "half hour" | "half an hour" | "half a hour" => return Some(1800),
+        "other day" => return Some(2 * 86400),
+        "other hour" => return Some(2 * 3600),
+        "other minute" => return Some(120),
+        "other week" => return Some(2 * 604800),
         _ => {}
     }
 
-    let num_part: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let unit_part: String = s.chars().skip_while(|c| c.is_ascii_digit()).collect();
+    // Try finding unit suffix
+    let units: &[(&[&str], u64)] = &[
+        (&["seconds", "second", "secs", "sec", "s"], 1),
+        (&["minutes", "minute", "mins", "min", "m"], 60),
+        (&["hours", "hour", "hrs", "hr", "h"], 3600),
+        (&["days", "day", "d"], 86400),
+        (&["weeks", "week", "w"], 604800),
+    ];
 
-    if num_part.is_empty() {
-        return None;
+    for (aliases, multiplier) in units {
+        for alias in *aliases {
+            if s.ends_with(alias) {
+                let prefix = s[..s.len() - alias.len()].trim();
+                if let Some(n) = parse_word_number(prefix) {
+                    if n > 0 {
+                        return n.checked_mul(*multiplier);
+                    }
+                }
+            }
+        }
     }
 
-    let n: u64 = num_part.parse().ok()?;
-    if n == 0 {
-        return None;
-    }
-
-    let unit = unit_part.trim();
-    match unit {
-        "s" | "sec" | "secs" | "second" | "seconds" => Some(n),
-        "m" | "min" | "mins" | "minute" | "minutes" => Some(n.checked_mul(60)?),
-        "h" | "hr" | "hrs" | "hour" | "hours" => Some(n.checked_mul(3600)?),
-        "d" | "day" | "days" => Some(n.checked_mul(86400)?),
-        "w" | "week" | "weeks" => Some(n.checked_mul(604800)?),
-        _ => None,
-    }
+    None
 }
 
 pub fn parse_time_of_day(input: &str) -> Result<(u8, u8), String> {
@@ -509,6 +585,13 @@ pub fn parse_time_of_day(input: &str) -> Result<(u8, u8), String> {
         return Ok((12, 0));
     }
 
+    // Strip "o'clock" if present
+    if let Some(stripped) = s.strip_suffix("o'clock") {
+        s = stripped.trim().to_string();
+    } else if let Some(stripped) = s.strip_suffix("o' clock") {
+        s = stripped.trim().to_string();
+    }
+
     let is_pm = if s.ends_with("pm") {
         s = s.strip_suffix("pm").unwrap().trim().to_string();
         true
@@ -520,6 +603,11 @@ pub fn parse_time_of_day(input: &str) -> Result<(u8, u8), String> {
     };
 
     let had_am_pm = input.to_lowercase().contains("am") || input.to_lowercase().contains("pm");
+
+    // Clean any remaining "o'clock"
+    if let Some(stripped) = s.strip_suffix("o'clock") {
+        s = stripped.trim().to_string();
+    }
 
     let (mut hour, minute) = if s.contains(':') {
         let parts: Vec<&str> = s.split(':').collect();
@@ -535,12 +623,20 @@ pub fn parse_time_of_day(input: &str) -> Result<(u8, u8), String> {
             .parse()
             .map_err(|_| format!("Invalid minute in '{}'", input))?;
         (h, m)
+    } else if let Some(n) = parse_word_number(&s) {
+        (n as u8, 0)
     } else {
-        let h: u8 = s
-            .trim()
-            .parse()
-            .map_err(|_| format!("Invalid hour in '{}'", input))?;
-        (h, 0)
+        let words: Vec<&str> = s.split_whitespace().collect();
+        if words.len() == 2 {
+            // e.g. "two thirty", "ten fifteen"
+            if let (Some(h), Some(m)) = (parse_word_number(words[0]), parse_word_number(words[1])) {
+                (h as u8, m as u8)
+            } else {
+                return Err(format!("Invalid time format '{}'", input));
+            }
+        } else {
+            return Err(format!("Invalid time format '{}'", input));
+        }
     };
 
     if had_am_pm {
@@ -733,7 +829,7 @@ pub fn parse_timespec(input: &str) -> Result<TimeSpec, String> {
     }
 
     Err(format!(
-        "Invalid timespec '{}'. Examples: '0 12 * * *', 'Wed 10 am', 'every 5 hours', 'daily at 10 am', '30m'",
+        "Invalid timespec '{}'. Examples: '0 12 * * *', 'Wed 10 am', 'every 5 hours', 'every two minutes', 'daily at 10 am', '30m'",
         input
     ))
 }
@@ -804,7 +900,15 @@ mod tests {
     #[test]
     fn test_interval_specs() {
         assert_eq!(
+            parse_timespec("every two minutes").unwrap(),
+            TimeSpec::Interval { seconds: 120 }
+        );
+        assert_eq!(
             parse_timespec("every 5 hours").unwrap(),
+            TimeSpec::Interval { seconds: 18000 }
+        );
+        assert_eq!(
+            parse_timespec("every five hours").unwrap(),
             TimeSpec::Interval { seconds: 18000 }
         );
         assert_eq!(
@@ -812,7 +916,15 @@ mod tests {
             TimeSpec::Interval { seconds: 1800 }
         );
         assert_eq!(
+            parse_timespec("every thirty minutes").unwrap(),
+            TimeSpec::Interval { seconds: 1800 }
+        );
+        assert_eq!(
             parse_timespec("every 10s").unwrap(),
+            TimeSpec::Interval { seconds: 10 }
+        );
+        assert_eq!(
+            parse_timespec("every ten seconds").unwrap(),
             TimeSpec::Interval { seconds: 10 }
         );
         assert_eq!(
@@ -825,6 +937,14 @@ mod tests {
         );
         assert_eq!(
             parse_timespec("every 2 days").unwrap(),
+            TimeSpec::Interval { seconds: 172800 }
+        );
+        assert_eq!(
+            parse_timespec("every two days").unwrap(),
+            TimeSpec::Interval { seconds: 172800 }
+        );
+        assert_eq!(
+            parse_timespec("every other day").unwrap(),
             TimeSpec::Interval { seconds: 172800 }
         );
         assert_eq!(
@@ -917,7 +1037,6 @@ mod tests {
     fn test_cron_catch_up_logic() {
         let wed10 = parse_timespec("Wed 10 am").unwrap();
 
-        // Suppose created on Monday 2026-08-03 09:00
         let created_at = chrono::NaiveDate::from_ymd_opt(2026, 8, 3)
             .unwrap()
             .and_hms_opt(9, 0, 0)
@@ -939,7 +1058,6 @@ mod tests {
             .unwrap();
         assert!(wed10.is_due(None, created_at, wed_now));
 
-        // If it ran on Wednesday 10:00, then at Wednesday 10:05 it is NOT due again
         let wed_ran = wed_now;
         let wed_1005 = chrono::NaiveDate::from_ymd_opt(2026, 8, 5)
             .unwrap()
@@ -950,8 +1068,6 @@ mod tests {
             .unwrap();
         assert!(!wed10.is_due(Some(wed_ran), created_at, wed_1005));
 
-        // Catch-up test: computer was off Wednesday, turned on Thursday 2026-08-06 11:00
-        // Last run was None (or last week)
         let thu_now = chrono::NaiveDate::from_ymd_opt(2026, 8, 6)
             .unwrap()
             .and_hms_opt(11, 0, 0)
@@ -961,8 +1077,6 @@ mod tests {
             .unwrap();
         assert!(wed10.is_due(None, created_at, thu_now));
 
-        // Once caught up on Thursday, last_run becomes Thursday 11:00.
-        // On Friday 2026-08-07 10:00, it is NOT due!
         let thu_ran = thu_now;
         let fri_now = chrono::NaiveDate::from_ymd_opt(2026, 8, 7)
             .unwrap()
