@@ -1,0 +1,38 @@
+* Features
+
+** Scheduled commands statuses
+
+** TODO Rescheduling
+Changing a scheduled command timespec.
+
+Usage examples:
+q --reschedule <timespec> <jobid>
+q -r <timespec> <jobid>
+schedule --reschedule <timespec> <jobid>
+schedule -r <timespec> <jobid>
+
+The '--reschedule' option implied --schedule, so the <jobid> is the id of a scheduled job.
+
+
+** DONE Disabling and enabling scheduled commands
+Any scheduled command can be disabled or enabled with the following commands:
+
+*** Disabling a scheduled command:
+q --schedule --disable <jobid>
+q --schedule -d <jobid>
+schedule --disable <jobid>
+schedule -d <jobid>
+
+When a scheduled command is disblaed, it must indicate DISABLED in the "NEXT RUN" field when displaying the status (scheduled commands list).
+
+*** Enabling a scheduled command
+q --schedule --enable <jobid>
+q --schedule -e <jobid>
+schedule --enable <jobid>
+schedule -e <jobid>
+
+When a scheduled command is enabled, it must indicate a proper schedule time to run in the "NEXT RUN" field.
+
+** GUI
+Qt based GUI.
+
