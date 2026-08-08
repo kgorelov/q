@@ -1,6 +1,6 @@
-.TH Q 1 "July 2026" "q 0.1.0" "User Commands"
+.TH Q 1 "August 2026" "q 0.1.0" "User Commands"
 .SH NAME
-q \- command line queue and execution tool
+q, schedule \- command line queue, execution, and scheduling tool
 .SH SYNOPSIS
 .B q
 .RB [ \-l | \-\-list ]
@@ -14,6 +14,33 @@ q \- command line queue and execution tool
 .I job_id
 .br
 .B q
+.RB [ \-s | \-\-schedule ]
+.RB [ \-l | \-\-list ]
+.br
+.B q
+.RB [ \-s | \-\-schedule ]
+.RB [ \-k | \-\-kill ]
+.I schedule_id
+.br
+.B q
+.RB [ \-s | \-\-schedule ]
+.I timespec
+.I command
+.RI [ args... ]
+.br
+.B schedule
+.RB [ \-l | \-\-list ]
+.br
+.B schedule
+.RB [ \-k | \-\-kill ]
+.I schedule_id
+.br
+.B schedule
+.I timespec
+.I command
+.RI [ args... ]
+.br
+.B q
 .I command
 .RI [ args... ]
 .br
@@ -23,26 +50,66 @@ q \- command line queue and execution tool
 .B q
 is a lightweight utility that queues command execution and runs jobs in parallel in the background, managed by a background daemon
 .BR qdaemon .
-If the daemon is not running when a command is queued or listed, the client starts it automatically.
+It also serves as an asynchronous cron daemon and periodic command scheduler in userland.
+If the daemon is not running when a command is queued, scheduled, or listed, the client starts it automatically.
+.PP
+.B schedule
+is an alias for
+.BR "q \-\-schedule" .
 .SH OPTIONS
 .TP
 .BR \-l ", " \-\-list
-List all jobs currently in the queue, including their ID, status, PID, start time, elapsed duration, and command. This is the default behavior if no arguments are provided.
+List all jobs currently in the queue, including their ID, status, PID, start time, elapsed duration, and command. If combined with
+.BR \-s " or " \-\-schedule ,
+lists all scheduled commands along with their last run time, elapsed time since last run, next scheduled run, and command.
 .TP
-.BR \-k ", " \-\-kill " \fIjob_id\fR"
-Kill a running job or cancel a queued job.
+.BR \-k ", " \-\-kill " \fIid\fR"
+Kill a running job or cancel a queued job. When combined with
+.BR \-s " or " \-\-schedule " (or using " schedule "),"
+removes the scheduled command with the specified ID.
 .TP
 .BR \-L ", " \-\-logs " \fIjob_id\fR"
 Print the captured standard output (stdout) and standard error (stderr) of the specified job.
 .TP
+.BR \-s ", " \-\-schedule
+Enable scheduling mode. When followed by a timespec and a command, schedules the command for periodic or cron execution. When used without a command or with
+.BR \-l ", lists scheduled commands. When used with " \-k ,
+removes a scheduled command.
+.TP
 .BR \-n ", " \-\-notify
-Force sending a desktop notification when the queued command finishes, regardless of its duration.
+Force sending a desktop notification when the command finishes, regardless of its duration.
 .TP
 .BR \-\-no\-notify
-Disable desktop notification for the queued command when it finishes.
+Disable desktop notification for the command when it finishes.
 .TP
 .BR \-h ", " \-\-help
 Print a summary of command usage and options.
+.SH TIMESPEC FORMATS
+The scheduler supports multiple timespec formats:
+.TP
+.B Cron Expressions
+Standard 5-field cron syntax:
+.I "minute hour day_of_month month day_of_week"
+(e.g., \fB"0 12 * * *"\fR, \fB"*/5 * * * *"\fR, \fB"0 0 * * 1-5"\fR, \fB"0 10 * * Wed"\fR).
+Standard cron shortcuts like \fB@hourly\fR, \fB@daily\fR, \fB@midnight\fR, \fB@weekly\fR, \fB@monthly\fR, \fB@yearly\fR are also supported.
+.TP
+.B Human-Readable Strings
+Natural language scheduling expressions such as:
+.RS
+.IP \(bu 2
+\fB"Wed 10 am"\fR, \fB"Wednesday 10:30 pm"\fR, \fB"every Wednesday at 10 am"\fR
+.IP \(bu 2
+\fB"weekdays at 8:00 am"\fR, \fB"weekends at 10 am"\fR
+.IP \(bu 2
+\fB"daily at 10 am"\fR, \fB"daily at 14:30"\fR, \fB"10 am"\fR, \fB"14:00"\fR
+.IP \(bu 2
+\fB"Mon,Wed,Fri 9am"\fR
+.RE
+.TP
+.B Periodic Intervals
+Fixed time periods such as \fB"every 5 hours"\fR, \fB"every 30 minutes"\fR, \fB"every 1 day"\fR, \fB"every 10 seconds"\fR, or shorthand notation like \fB"5h"\fR, \fB"30m"\fR, \fB"10s"\fR, \fB"2d"\fR.
+.SH ASYNCHRONOUS CATCH-UP
+The scheduler operates asynchronously. If the machine was powered off or the daemon was inactive when a scheduled command was due, the daemon automatically detects missed runs upon startup and executes them to catch up.
 .SH CONFIGURATION
 The daemon reads its configuration from a TOML file. The path is searched in the following order:
 .IP 1.
@@ -77,6 +144,9 @@ Unix domain socket used for client-daemon communication.
 Process ID of the running daemon.
 .TP
 .I ~/.q/spool/
-Spool directory containing metadata and logs for each job.
+Spool directory containing metadata and logs for each queued job.
+.TP
+.I ~/.q/schedules/
+Directory containing specifications and tracking state for scheduled commands.
 .SH AUTHORS
 Written by kgorelov.

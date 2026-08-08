@@ -3,7 +3,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use q::{
-    get_spool_dir, connect_daemon, ConnectionStream, JobInfoShort, Request, Response,
+    get_spool_dir, connect_daemon, ConnectionStream, JobInfoShort,
+    ScheduleInfoShort, Request, Response,
 };
 
 #[cfg(windows)]
@@ -41,6 +42,23 @@ fn spawn_daemon(daemon_exe: &Path) -> std::io::Result<std::process::Child> {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Check if invoked as `schedule` alias
+    let is_schedule_alias = std::env::args()
+        .next()
+        .map(|p| {
+            let path = PathBuf::from(p);
+            path.file_stem()
+                .map(|s| s == "schedule")
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if is_schedule_alias {
+        run_schedule_cli(&args[1..]).await;
+        return;
+    }
+
     if args.len() < 2 {
         handle_list().await;
         return;
@@ -87,6 +105,10 @@ async fn main() {
             };
             handle_logs(job_id);
             return;
+        } else if arg == "-s" || arg == "--schedule" {
+            // Schedule mode via `q --schedule` or `q -s`
+            run_schedule_cli(&args[idx + 1..]).await;
+            return;
         } else if arg == "-n" || arg == "--notify" {
             notify_override = Some(true);
             idx += 1;
@@ -108,20 +130,116 @@ async fn main() {
     handle_queue(cmd, cmd_args, notify_override).await;
 }
 
+async fn run_schedule_cli(args: &[String]) {
+    if args.is_empty() {
+        handle_schedule_list().await;
+        return;
+    }
+
+    let mut notify_override: Option<bool> = None;
+    let mut idx = 0;
+
+    while idx < args.len() {
+        let arg = &args[idx];
+        if arg == "-h" || arg == "--help" {
+            print_schedule_help();
+            return;
+        } else if arg == "-l" || arg == "--list" {
+            handle_schedule_list().await;
+            return;
+        } else if arg == "-k" || arg == "--kill" {
+            if idx + 1 >= args.len() {
+                eprintln!("Error: schedule ID is required.");
+                eprintln!("Usage: schedule --kill <id>");
+                std::process::exit(1);
+            }
+            let schedule_id: usize = match args[idx + 1].parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    eprintln!("Error: invalid schedule ID '{}'", args[idx + 1]);
+                    std::process::exit(1);
+                }
+            };
+            handle_schedule_kill(schedule_id).await;
+            return;
+        } else if arg == "-n" || arg == "--notify" {
+            notify_override = Some(true);
+            idx += 1;
+        } else if arg == "--no-notify" {
+            notify_override = Some(false);
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    if idx >= args.len() {
+        handle_schedule_list().await;
+        return;
+    }
+
+    if idx + 1 >= args.len() {
+        eprintln!("Error: command is required.");
+        eprintln!("Usage: schedule <timespec> <command> [args...]");
+        eprintln!("       q --schedule <timespec> <command> [args...]");
+        std::process::exit(1);
+    }
+
+    let timespec = args[idx].clone();
+    let cmd = args[idx + 1].clone();
+    let cmd_args = args[idx + 2..].to_vec();
+    handle_schedule_add(timespec, cmd, cmd_args, notify_override).await;
+}
+
 fn print_help() {
-    println!("q - command line tool to queue and execute commands");
+    println!("q - command line tool to queue, execute, and schedule commands");
     println!();
     println!("Usage:");
     println!("  q [options]");
     println!("  q [notification-options] <command> [args...]");
+    println!("  q -s, --schedule [schedule-options]");
+    println!("  q -s, --schedule <timespec> <command> [args...]");
+    println!("  schedule [schedule-options]");
+    println!("  schedule <timespec> <command> [args...]");
     println!();
     println!("Options:");
-    println!("  -l, --list        List all queued, running, and completed jobs");
-    println!("  -k, --kill <id>   Kill a running job or cancel a queued job");
-    println!("  -L, --logs <id>   Print stdout and stderr of a job");
-    println!("  -n, --notify      Force desktop notification on job completion");
-    println!("  --no-notify       Disable desktop notification for job completion");
+    println!("  -l, --list                  List all queued, running, and completed jobs");
+    println!("  -k, --kill <id>             Kill a running job or cancel a queued job");
+    println!("  -L, --logs <id>             Print stdout and stderr of a job");
+    println!("  -s, --schedule              Enable scheduling mode (or list scheduled commands)");
+    println!("  -n, --notify                Force desktop notification on job completion");
+    println!("  --no-notify                 Disable desktop notification for job completion");
+    println!("  -h, --help                  Show this help message");
+    println!();
+    println!("Schedule Options (with -s, --schedule, or 'schedule' alias):");
+    println!("  -l, --list                  List all scheduled commands (default)");
+    println!("  -k, --kill <id>             Remove a scheduled command");
+    println!("  <timespec> <cmd> [args...]  Schedule a command for periodic or cron execution");
+    println!();
+    println!("Timespec Formats:");
+    println!("  - Cron syntax:     \"0 12 * * *\", \"*/5 * * * *\", \"0 0 * * 1-5\"");
+    println!("  - Human readable:  \"Wed 10 am\", \"daily at 10 am\", \"weekdays at 8:00 am\"");
+    println!("  - Periodic:        \"every 5 hours\", \"every 30 minutes\", \"every 1 day\", \"5h\"");
+}
+
+fn print_schedule_help() {
+    println!("schedule - command line asynchronous cron and periodic scheduler");
+    println!();
+    println!("Usage:");
+    println!("  schedule [options]");
+    println!("  schedule <timespec> <command> [args...]");
+    println!();
+    println!("Options:");
+    println!("  -l, --list        List all scheduled commands with last run and elapsed time");
+    println!("  -k, --kill <id>   Remove a scheduled command by ID");
+    println!("  -n, --notify      Force desktop notification when scheduled command finishes");
+    println!("  --no-notify       Disable desktop notification for scheduled command");
     println!("  -h, --help        Show this help message");
+    println!();
+    println!("Timespec Formats:");
+    println!("  - Cron syntax:     \"0 12 * * *\", \"*/5 * * * *\", \"0 0 * * 1-5\"");
+    println!("  - Human readable:  \"Wed 10 am\", \"daily at 10 am\", \"weekdays at 8:00 am\"");
+    println!("  - Periodic:        \"every 5 hours\", \"every 30 minutes\", \"every 1 day\", \"5h\"");
 }
 
 async fn connect_or_start_daemon() -> ConnectionStream {
@@ -192,6 +310,151 @@ async fn handle_queue(cmd: String, args: Vec<String>, notify: Option<bool>) {
     match resp {
         Response::Queued { job_id } => {
             println!("Job {} queued successfully.", job_id);
+        }
+        Response::Error { message } => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!("Unexpected response from daemon.");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn handle_schedule_add(
+    timespec: String,
+    cmd: String,
+    args: Vec<String>,
+    notify: Option<bool>,
+) {
+    if let Err(e) = q::timespec::parse_timespec(&timespec) {
+        eprintln!("Error: invalid timespec '{}': {}", timespec, e);
+        std::process::exit(1);
+    }
+
+    let mut stream = connect_or_start_daemon().await;
+
+    let work_dir = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+    let env: Vec<(String, String)> = std::env::vars().collect();
+
+    let req = Request::Schedule {
+        timespec: timespec.clone(),
+        cmd,
+        args,
+        work_dir,
+        env,
+        notify,
+    };
+    let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
+
+    if let Err(e) = stream.write_all(req_str.as_bytes()).await {
+        eprintln!("Error sending request to daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let mut reader = BufReader::new(stream);
+    let mut response_line = String::new();
+    if let Err(e) = reader.read_line(&mut response_line).await {
+        eprintln!("Error reading response from daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let resp: Response = match serde_json::from_str(&response_line) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error parsing response from daemon: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match resp {
+        Response::Scheduled { schedule_id } => {
+            println!("Scheduled command {} ('{}') successfully.", schedule_id, timespec);
+        }
+        Response::Error { message } => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!("Unexpected response from daemon.");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn handle_schedule_list() {
+    let mut stream = connect_or_start_daemon().await;
+
+    let req = Request::ScheduleList;
+    let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
+
+    if let Err(e) = stream.write_all(req_str.as_bytes()).await {
+        eprintln!("Error sending request to daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let mut reader = BufReader::new(stream);
+    let mut response_line = String::new();
+    if let Err(e) = reader.read_line(&mut response_line).await {
+        eprintln!("Error reading response from daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let resp: Response = match serde_json::from_str(&response_line) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error parsing response from daemon: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match resp {
+        Response::ScheduleList { schedules } => {
+            print_schedules_table(&schedules);
+        }
+        Response::Error { message } => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!("Unexpected response from daemon.");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn handle_schedule_kill(schedule_id: usize) {
+    let mut stream = connect_or_start_daemon().await;
+
+    let req = Request::ScheduleKill { schedule_id };
+    let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
+
+    if let Err(e) = stream.write_all(req_str.as_bytes()).await {
+        eprintln!("Error sending request to daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let mut reader = BufReader::new(stream);
+    let mut response_line = String::new();
+    if let Err(e) = reader.read_line(&mut response_line).await {
+        eprintln!("Error reading response from daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let resp: Response = match serde_json::from_str(&response_line) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error parsing response from daemon: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match resp {
+        Response::Ok => {
+            println!("Scheduled command {} removed successfully.", schedule_id);
         }
         Response::Error { message } => {
             eprintln!("Error: {}", message);
@@ -375,6 +638,102 @@ fn print_jobs_table(jobs: &[JobInfoShort]) {
             pid_width = max_pid_len,
             start_width = max_start_len,
             time_width = max_time_len
+        );
+    }
+}
+
+fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
+    if schedules.is_empty() {
+        println!("No scheduled commands.");
+        return;
+    }
+
+    let mut max_id_len = 2; // "ID"
+    let mut max_timespec_len = 8; // "TIMESPEC"
+    let mut max_last_run_len = 8; // "LAST RUN"
+    let mut max_elapsed_len = 7; // "ELAPSED"
+    let mut max_next_run_len = 8; // "NEXT RUN"
+
+    let mut formatted = Vec::new();
+    let now_utc = chrono::Utc::now();
+
+    for s in schedules {
+        let last_run_str = if let Some(ref lr) = s.last_run {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(lr) {
+                dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
+            } else {
+                "--".to_string()
+            }
+        } else {
+            "--".to_string()
+        };
+
+        let elapsed_str = if let Some(ref lr) = s.last_run {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(lr) {
+                let dt_utc = dt.with_timezone(&chrono::Utc);
+                let diff = now_utc.signed_duration_since(dt_utc);
+                format_duration(diff.num_seconds())
+            } else {
+                "--".to_string()
+            }
+        } else {
+            "never".to_string()
+        };
+
+        let next_run_str = if let Some(ref nr) = s.next_run {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(nr) {
+                dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
+            } else {
+                "--".to_string()
+            }
+        } else {
+            "--".to_string()
+        };
+
+        max_id_len = max_id_len.max(s.id.to_string().len());
+        max_timespec_len = max_timespec_len.max(s.timespec.len());
+        max_last_run_len = max_last_run_len.max(last_run_str.len());
+        max_elapsed_len = max_elapsed_len.max(elapsed_str.len());
+        max_next_run_len = max_next_run_len.max(next_run_str.len());
+
+        formatted.push((
+            s.id,
+            s.timespec.clone(),
+            last_run_str,
+            elapsed_str,
+            next_run_str,
+            s.cmd.clone(),
+        ));
+    }
+
+    println!(
+        "{:<id_w$}  {:<ts_w$}  {:<lr_w$}  {:<el_w$}  {:<nr_w$}  {}",
+        "ID", "TIMESPEC", "LAST RUN", "ELAPSED", "NEXT RUN", "COMMAND",
+        id_w = max_id_len,
+        ts_w = max_timespec_len,
+        lr_w = max_last_run_len,
+        el_w = max_elapsed_len,
+        nr_w = max_next_run_len,
+    );
+    println!(
+        "{:-<id_w$}--{:-<ts_w$}--{:-<lr_w$}--{:-<el_w$}--{:-<nr_w$}--{:-<20}",
+        "", "", "", "", "", "",
+        id_w = max_id_len,
+        ts_w = max_timespec_len,
+        lr_w = max_last_run_len,
+        el_w = max_elapsed_len,
+        nr_w = max_next_run_len,
+    );
+
+    for (id, ts, lr, el, nr, cmd) in formatted {
+        println!(
+            "{:<id_w$}  {:<ts_w$}  {:<lr_w$}  {:<el_w$}  {:<nr_w$}  {}",
+            id, ts, lr, el, nr, cmd,
+            id_w = max_id_len,
+            ts_w = max_timespec_len,
+            lr_w = max_last_run_len,
+            el_w = max_elapsed_len,
+            nr_w = max_next_run_len,
         );
     }
 }

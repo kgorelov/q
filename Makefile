@@ -14,11 +14,13 @@ install: build
 	install -d $(DESTDIR)$(MANDIR)
 	install -m 755 target/release/q $(DESTDIR)$(BINDIR)/q
 	install -m 755 target/release/qdaemon $(DESTDIR)$(BINDIR)/qdaemon
+	ln -sf q $(DESTDIR)$(BINDIR)/schedule
 	install -m 644 q.1 $(DESTDIR)$(MANDIR)/q.1
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/q
 	rm -f $(DESTDIR)$(BINDIR)/qdaemon
+	rm -f $(DESTDIR)$(BINDIR)/schedule
 	rm -f $(DESTDIR)$(MANDIR)/q.1
 
 clean:

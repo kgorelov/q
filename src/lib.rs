@@ -1,6 +1,9 @@
+pub mod timespec;
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use timespec::TimeSpec;
 
 fn default_true() -> bool {
     true
@@ -39,6 +42,10 @@ pub fn get_q_dir() -> PathBuf {
 
 pub fn get_spool_dir() -> PathBuf {
     get_q_dir().join("spool")
+}
+
+pub fn get_schedules_dir() -> PathBuf {
+    get_q_dir().join("schedules")
 }
 
 pub fn get_socket_path() -> PathBuf {
@@ -222,6 +229,36 @@ pub struct JobInfo {
     pub end_time: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScheduleSpec {
+    pub id: usize,
+    pub timespec: String,
+    pub parsed: TimeSpec,
+    pub cmd: String,
+    pub args: Vec<String>,
+    pub work_dir: String,
+    pub env: Vec<(String, String)>,
+    #[serde(default)]
+    pub notify: Option<bool>,
+    pub created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScheduleInfo {
+    pub spec: ScheduleSpec,
+    pub last_run: Option<String>,
+    pub last_job_id: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScheduleInfoShort {
+    pub id: usize,
+    pub timespec: String,
+    pub cmd: String,
+    pub last_run: Option<String>,
+    pub next_run: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
     Queue {
@@ -235,6 +272,19 @@ pub enum Request {
     List,
     Kill {
         job_id: usize,
+    },
+    Schedule {
+        timespec: String,
+        cmd: String,
+        args: Vec<String>,
+        work_dir: String,
+        env: Vec<(String, String)>,
+        #[serde(default)]
+        notify: Option<bool>,
+    },
+    ScheduleList,
+    ScheduleKill {
+        schedule_id: usize,
     },
 }
 
@@ -253,6 +303,8 @@ pub enum Response {
     Ok,
     Queued { job_id: usize },
     List { jobs: Vec<JobInfoShort> },
+    Scheduled { schedule_id: usize },
+    ScheduleList { schedules: Vec<ScheduleInfoShort> },
     Error { message: String },
 }
 
@@ -299,6 +351,28 @@ mod tests {
         let json_str = r#"{"cmd":"sleep","args":["5"],"work_dir":".","env":[],"notify":true}"#;
         let spec: JobSpec = serde_json::from_str(json_str).unwrap();
         assert_eq!(spec.notify, Some(true));
+    }
+
+    #[test]
+    fn test_schedule_request_serialization() {
+        let req = Request::Schedule {
+            timespec: "Wed 10 am".to_string(),
+            cmd: "backup.sh".to_string(),
+            args: vec!["--all".to_string()],
+            work_dir: "/tmp".to_string(),
+            env: vec![("FOO".to_string(), "BAR".to_string())],
+            notify: Some(true),
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&s).unwrap();
+        match parsed {
+            Request::Schedule { timespec, cmd, args, .. } => {
+                assert_eq!(timespec, "Wed 10 am");
+                assert_eq!(cmd, "backup.sh");
+                assert_eq!(args, vec!["--all"]);
+            }
+            _ => panic!("Expected Schedule request"),
+        }
     }
 }
 
