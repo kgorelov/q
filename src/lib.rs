@@ -294,6 +294,10 @@ pub enum Request {
     ScheduleEnable {
         schedule_id: usize,
     },
+    ScheduleUpdate {
+        schedule_id: usize,
+        timespec: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

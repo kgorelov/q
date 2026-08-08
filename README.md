@@ -11,6 +11,7 @@ If the daemon is not running when you interact with `q` or `schedule`, the clien
 - **Background Queueing**: Queue commands to run asynchronously in the background.
 - **Parallel Execution**: Execute multiple jobs concurrently, up to a configurable limit.
 - **Asynchronous Userland Cron & Scheduler**: Schedule commands with cron expressions, human-readable times (`Wed 10 am`, `weekdays at 8:00 am`), or periodic intervals (`every 5 hours`, `30m`).
+- **Reschedule Existing Commands**: Change the timespec of an existing scheduled job on the fly with `--reschedule` / `-r`.
 - **Disable & Enable Schedules**: Temporarily disable any scheduled command with `--disable` / `-d` and re-enable it with `--enable` / `-e`.
 - **Power-Off Catch-Up**: Asynchronous catch-up ensures scheduled jobs that were missed while the machine was turned off or asleep run when the daemon resumes.
 - **Start Time & Duration Tracking**: Keep track of start time, duration, and elapsed time since last run.
@@ -55,6 +56,12 @@ q -s, --schedule <timespec> <command> [args...]
 # 'schedule' is an alias for 'q --schedule':
 schedule [schedule-options]
 schedule <timespec> <command> [args...]
+
+# Rescheduling a command:
+q --reschedule <jobid> <timespec>
+q -r <jobid> <timespec>
+schedule --reschedule <jobid> <timespec>
+schedule -r <jobid> <timespec>
 ```
 
 ### Options
@@ -65,6 +72,7 @@ schedule <timespec> <command> [args...]
 | `-k`, `--kill <id>` | Kills a running job or cancels a queued job. |
 | `-L`, `--logs <id>` | Prints the captured stdout and stderr logs for a job. |
 | `-s`, `--schedule` | Enables scheduling mode. |
+| `-r`, `--reschedule <id> <ts>` | Changes the timespec of a scheduled command (implies `--schedule`). |
 | `-n`, `--notify` | Force desktop notification on job completion. |
 | `--no-notify` | Disable desktop notification for job completion. |
 | `-h`, `--help` | Prints the help message. |
@@ -77,6 +85,7 @@ schedule <timespec> <command> [args...]
 | `-k`, `--kill <id>` | Removes a scheduled command by ID. |
 | `-d`, `--disable <id>` | Disables a scheduled command (shows `DISABLED` in `NEXT RUN`). |
 | `-e`, `--enable <id>` | Enables a previously disabled scheduled command. |
+| `-r`, `--reschedule <id> <ts>` | Changes the timespec of an existing scheduled command. |
 | `<timespec> <cmd> [args...]` | Schedules a command for periodic or cron execution. |
 
 ---
@@ -155,7 +164,13 @@ The scheduler supports flexible timespec expressions:
    2   every 5 hours  2026-08-08 07:00:00  4h 50m   2026-08-08 12:00:00  sync_data.sh
    ```
 
-5. **Disable and Enable scheduled commands**:
+5. **Reschedule a command**:
+   ```bash
+   schedule --reschedule 2 "every 2 hours"
+   # or: q -r 2 "every 2 hours"
+   ```
+
+6. **Disable and Enable scheduled commands**:
    ```bash
    # Disable schedule #1
    schedule --disable 1
@@ -166,7 +181,7 @@ The scheduler supports flexible timespec expressions:
    ID  TIMESPEC       LAST RUN             ELAPSED  NEXT RUN   COMMAND
    --------------------------------------------------------------------------------
    1   Wed 10 am      2026-08-05 10:00:00  3d 1h    DISABLED   backup.sh --all
-   2   every 5 hours  2026-08-08 07:00:00  4h 50m   2026-08-08 12:00:00  sync_data.sh
+   2   every 2 hours  2026-08-08 07:00:00  4h 50m   2026-08-08 09:00:00  sync_data.sh
    ```
 
    ```bash
@@ -175,14 +190,14 @@ The scheduler supports flexible timespec expressions:
    # or: q --schedule -e 1
    ```
 
-6. **Remove a scheduled command**:
+7. **Remove a scheduled command**:
    ```bash
    schedule --kill 1
    # or
    q --schedule -k 1
    ```
 
-7. **View logs & Kill jobs**:
+8. **View logs & Kill jobs**:
    ```bash
    q --logs 16
    q --kill 18

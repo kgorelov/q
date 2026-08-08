@@ -2,14 +2,14 @@
 
 ** Scheduled commands statuses
 
-** TODO Rescheduling
+** DONE Rescheduling
 Changing a scheduled command timespec.
 
 Usage examples:
-q --reschedule <timespec> <jobid>
-q -r <timespec> <jobid>
-schedule --reschedule <timespec> <jobid>
-schedule -r <timespec> <jobid>
+q --reschedule <jobid> <timespec>
+q -r <jobid> <timespec>
+schedule --reschedule <jobid> <timespec>
+schedule -r <jobid> <timespec>
 
 The '--reschedule' option implied --schedule, so the <jobid> is the id of a scheduled job.
 
@@ -32,6 +32,17 @@ schedule --enable <jobid>
 schedule -e <jobid>
 
 When a scheduled command is enabled, it must indicate a proper schedule time to run in the "NEXT RUN" field.
+
+** TODO Color coding in the terminal
+q output:
+  - running command: yellow
+  - successfuly terminated: green
+  - failed commands: red
+
+schedule:
+  - disabled: grey
+  - sucessful: green
+  - running: yellow
 
 ** GUI
 Qt based GUI.

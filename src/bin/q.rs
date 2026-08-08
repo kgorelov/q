@@ -105,6 +105,22 @@ async fn main() {
             };
             handle_logs(job_id);
             return;
+        } else if arg == "-r" || arg == "--reschedule" {
+            if idx + 2 >= args.len() {
+                eprintln!("Error: schedule ID and timespec are required.");
+                eprintln!("Usage: q --reschedule <jobid> <timespec>");
+                std::process::exit(1);
+            }
+            let schedule_id: usize = match args[idx + 1].parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    eprintln!("Error: invalid schedule ID '{}'", args[idx + 1]);
+                    std::process::exit(1);
+                }
+            };
+            let timespec = args[idx + 2].clone();
+            handle_schedule_update(schedule_id, timespec).await;
+            return;
         } else if arg == "-s" || arg == "--schedule" {
             // Schedule mode via `q --schedule` or `q -s`
             run_schedule_cli(&args[idx + 1..]).await;
@@ -192,6 +208,22 @@ async fn run_schedule_cli(args: &[String]) {
             };
             handle_schedule_enable(schedule_id).await;
             return;
+        } else if arg == "-r" || arg == "--reschedule" {
+            if idx + 2 >= args.len() {
+                eprintln!("Error: schedule ID and timespec are required.");
+                eprintln!("Usage: schedule --reschedule <jobid> <timespec>");
+                std::process::exit(1);
+            }
+            let schedule_id: usize = match args[idx + 1].parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    eprintln!("Error: invalid schedule ID '{}'", args[idx + 1]);
+                    std::process::exit(1);
+                }
+            };
+            let timespec = args[idx + 2].clone();
+            handle_schedule_update(schedule_id, timespec).await;
+            return;
         } else if arg == "-n" || arg == "--notify" {
             notify_override = Some(true);
             idx += 1;
@@ -237,6 +269,7 @@ fn print_help() {
     println!("  -k, --kill <id>             Kill a running job or cancel a queued job");
     println!("  -L, --logs <id>             Print stdout and stderr of a job");
     println!("  -s, --schedule              Enable scheduling mode (or list scheduled commands)");
+    println!("  -r, --reschedule <id> <ts>  Change timespec for a scheduled command");
     println!("  -n, --notify                Force desktop notification on job completion");
     println!("  --no-notify                 Disable desktop notification for job completion");
     println!("  -h, --help                  Show this help message");
@@ -246,6 +279,7 @@ fn print_help() {
     println!("  -k, --kill <id>             Remove a scheduled command");
     println!("  -d, --disable <id>          Disable a scheduled command");
     println!("  -e, --enable <id>           Enable a scheduled command");
+    println!("  -r, --reschedule <id> <ts>  Change timespec for a scheduled command");
     println!("  <timespec> <cmd> [args...]  Schedule a command for periodic or cron execution");
     println!();
     println!("Timespec Formats:");
@@ -262,13 +296,14 @@ fn print_schedule_help() {
     println!("  schedule <timespec> <command> [args...]");
     println!();
     println!("Options:");
-    println!("  -l, --list        List all scheduled commands with last run and elapsed time");
-    println!("  -k, --kill <id>   Remove a scheduled command by ID");
-    println!("  -d, --disable <id> Disable a scheduled command");
-    println!("  -e, --enable <id>  Enable a scheduled command");
-    println!("  -n, --notify      Force desktop notification when scheduled command finishes");
-    println!("  --no-notify       Disable desktop notification for scheduled command");
-    println!("  -h, --help        Show this help message");
+    println!("  -l, --list                  List all scheduled commands with last run and elapsed time");
+    println!("  -k, --kill <id>             Remove a scheduled command by ID");
+    println!("  -d, --disable <id>          Disable a scheduled command");
+    println!("  -e, --enable <id>           Enable a scheduled command");
+    println!("  -r, --reschedule <id> <ts>  Change timespec for a scheduled command");
+    println!("  -n, --notify                Force desktop notification when scheduled command finishes");
+    println!("  --no-notify                 Disable desktop notification for scheduled command");
+    println!("  -h, --help                  Show this help message");
     println!();
     println!("Timespec Formats:");
     println!("  - Cron syntax:     \"0 12 * * *\", \"*/5 * * * *\", \"0 0 * * 1-5\"");
@@ -571,6 +606,52 @@ async fn handle_schedule_enable(schedule_id: usize) {
     match resp {
         Response::Ok => {
             println!("Scheduled command {} enabled successfully.", schedule_id);
+        }
+        Response::Error { message } => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!("Unexpected response from daemon.");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn handle_schedule_update(schedule_id: usize, timespec: String) {
+    if let Err(e) = q::timespec::parse_timespec(&timespec) {
+        eprintln!("Error: invalid timespec '{}': {}", timespec, e);
+        std::process::exit(1);
+    }
+
+    let mut stream = connect_or_start_daemon().await;
+
+    let req = Request::ScheduleUpdate { schedule_id, timespec: timespec.clone() };
+    let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
+
+    if let Err(e) = stream.write_all(req_str.as_bytes()).await {
+        eprintln!("Error sending request to daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let mut reader = BufReader::new(stream);
+    let mut response_line = String::new();
+    if let Err(e) = reader.read_line(&mut response_line).await {
+        eprintln!("Error reading response from daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let resp: Response = match serde_json::from_str(&response_line) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error parsing response from daemon: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match resp {
+        Response::Ok => {
+            println!("Scheduled command {} rescheduled to '{}' successfully.", schedule_id, timespec);
         }
         Response::Error { message } => {
             eprintln!("Error: {}", message);

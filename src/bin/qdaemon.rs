@@ -808,6 +808,44 @@ async fn handle_connection(
                     }
                 }
             }
+            Request::ScheduleUpdate { schedule_id, timespec } => {
+                match q::timespec::parse_timespec(&timespec) {
+                    Err(e) => {
+                        Response::Error { message: format!("Invalid timespec '{}': {}", timespec, e) }
+                    }
+                    Ok(parsed_spec) => {
+                        let sched_dir = schedules_dir.join(schedule_id.to_string());
+                        let spec_path = sched_dir.join("spec.json");
+                        if !sched_dir.exists() || !spec_path.exists() {
+                            Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                        } else {
+                            let spec_str = match fs::read_to_string(&spec_path) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
+                                    if let Ok(resp_str) = serde_json::to_string(&resp) {
+                                        let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
+                                    }
+                                    line.clear();
+                                    continue;
+                                }
+                            };
+                            if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
+                                sched_spec.timespec = timespec;
+                                sched_spec.parsed = parsed_spec;
+                                if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                                    Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
+                                } else {
+                                    let _ = tx.send(()).await;
+                                    Response::Ok
+                                }
+                            } else {
+                                Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
+                            }
+                        }
+                    }
+                }
+            }
         };
 
         if let Ok(resp_str) = serde_json::to_string(&response) {
