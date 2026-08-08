@@ -24,6 +24,16 @@ q, schedule \- command line queue, execution, and scheduling tool
 .br
 .B q
 .RB [ \-s | \-\-schedule ]
+.RB [ \-d | \-\-disable ]
+.I schedule_id
+.br
+.B q
+.RB [ \-s | \-\-schedule ]
+.RB [ \-e | \-\-enable ]
+.I schedule_id
+.br
+.B q
+.RB [ \-s | \-\-schedule ]
 .I timespec
 .I command
 .RI [ args... ]
@@ -33,6 +43,14 @@ q, schedule \- command line queue, execution, and scheduling tool
 .br
 .B schedule
 .RB [ \-k | \-\-kill ]
+.I schedule_id
+.br
+.B schedule
+.RB [ \-d | \-\-disable ]
+.I schedule_id
+.br
+.B schedule
+.RB [ \-e | \-\-enable ]
 .I schedule_id
 .br
 .B schedule
@@ -68,13 +86,19 @@ Kill a running job or cancel a queued job. When combined with
 .BR \-s " or " \-\-schedule " (or using " schedule "),"
 removes the scheduled command with the specified ID.
 .TP
+.BR \-d ", " \-\-disable " \fIid\fR"
+Disable a scheduled command. When disabled, the command will not be triggered and displays \fBDISABLED\fR in the \fBNEXT RUN\fR column.
+.TP
+.BR \-e ", " \-\-enable " \fIid\fR"
+Enable a previously disabled scheduled command, restoring its normal schedule calculation in the \fBNEXT RUN\fR column.
+.TP
 .BR \-L ", " \-\-logs " \fIjob_id\fR"
 Print the captured standard output (stdout) and standard error (stderr) of the specified job.
 .TP
 .BR \-s ", " \-\-schedule
 Enable scheduling mode. When followed by a timespec and a command, schedules the command for periodic or cron execution. When used without a command or with
-.BR \-l ", lists scheduled commands. When used with " \-k ,
-removes a scheduled command.
+.BR \-l ", lists scheduled commands. When used with " \-k ", " \-d ", or " \-e ,
+manages scheduled commands.
 .TP
 .BR \-n ", " \-\-notify
 Force sending a desktop notification when the command finishes, regardless of its duration.
@@ -107,7 +131,7 @@ Natural language scheduling expressions such as:
 .RE
 .TP
 .B Periodic Intervals
-Fixed time periods such as \fB"every 5 hours"\fR, \fB"every 30 minutes"\fR, \fB"every 1 day"\fR, \fB"every 10 seconds"\fR, or shorthand notation like \fB"5h"\fR, \fB"30m"\fR, \fB"10s"\fR, \fB"2d"\fR.
+Fixed time periods such as \fB"every 5 hours"\fR, \fB"every two minutes"\fR, \fB"every 30 minutes"\fR, \fB"every 1 day"\fR, \fB"every 10 seconds"\fR, or shorthand notation like \fB"5h"\fR, \fB"30m"\fR, \fB"10s"\fR, \fB"2d"\fR.
 .SH ASYNCHRONOUS CATCH-UP
 The scheduler operates asynchronously. If the machine was powered off or the daemon was inactive when a scheduled command was due, the daemon automatically detects missed runs upon startup and executes them to catch up.
 .SH CONFIGURATION

@@ -241,6 +241,8 @@ pub struct ScheduleSpec {
     #[serde(default)]
     pub notify: Option<bool>,
     pub created_at: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -284,6 +286,12 @@ pub enum Request {
     },
     ScheduleList,
     ScheduleKill {
+        schedule_id: usize,
+    },
+    ScheduleDisable {
+        schedule_id: usize,
+    },
+    ScheduleEnable {
         schedule_id: usize,
     },
 }

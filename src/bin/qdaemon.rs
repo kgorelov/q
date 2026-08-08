@@ -373,6 +373,9 @@ async fn run_queue_manager(
         let now = chrono::Local::now();
 
         for s in schedules {
+            if !s.spec.enabled {
+                continue;
+            }
             let created_at = chrono::DateTime::parse_from_rfc3339(&s.spec.created_at)
                 .ok()
                 .map(|dt| dt.with_timezone(&chrono::Local))
@@ -689,6 +692,7 @@ async fn handle_connection(
                                 env,
                                 notify,
                                 created_at,
+                                enabled: true,
                             };
                             if let Err(e) = fs::write(sched_dir.join("spec.json"), serde_json::to_string(&sched_spec).unwrap()) {
                                 Response::Error { message: format!("Failed to write schedule spec: {}", e) }
@@ -715,9 +719,13 @@ async fn handle_connection(
                                 .ok()
                                 .map(|dt| dt.with_timezone(&chrono::Local))
                         });
-                        let next_run = s.spec.parsed
-                            .next_run(last_run_dt, created_at, now)
-                            .map(|dt| dt.to_rfc3339());
+                        let next_run = if !s.spec.enabled {
+                            Some("DISABLED".to_string())
+                        } else {
+                            s.spec.parsed
+                                .next_run(last_run_dt, created_at, now)
+                                .map(|dt| dt.to_rfc3339())
+                        };
 
                         ScheduleInfoShort {
                             id: s.spec.id,
@@ -738,6 +746,66 @@ async fn handle_connection(
                     let _ = fs::remove_dir_all(&sched_dir);
                     let _ = tx.send(()).await;
                     Response::Ok
+                }
+            }
+            Request::ScheduleDisable { schedule_id } => {
+                let sched_dir = schedules_dir.join(schedule_id.to_string());
+                let spec_path = sched_dir.join("spec.json");
+                if !sched_dir.exists() || !spec_path.exists() {
+                    Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                } else {
+                    let spec_str = match fs::read_to_string(&spec_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
+                            if let Ok(resp_str) = serde_json::to_string(&resp) {
+                                let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
+                            }
+                            line.clear();
+                            continue;
+                        }
+                    };
+                    if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
+                        sched_spec.enabled = false;
+                        if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                            Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
+                        } else {
+                            let _ = tx.send(()).await;
+                            Response::Ok
+                        }
+                    } else {
+                        Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
+                    }
+                }
+            }
+            Request::ScheduleEnable { schedule_id } => {
+                let sched_dir = schedules_dir.join(schedule_id.to_string());
+                let spec_path = sched_dir.join("spec.json");
+                if !sched_dir.exists() || !spec_path.exists() {
+                    Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                } else {
+                    let spec_str = match fs::read_to_string(&spec_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
+                            if let Ok(resp_str) = serde_json::to_string(&resp) {
+                                let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
+                            }
+                            line.clear();
+                            continue;
+                        }
+                    };
+                    if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
+                        sched_spec.enabled = true;
+                        if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                            Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
+                        } else {
+                            let _ = tx.send(()).await;
+                            Response::Ok
+                        }
+                    } else {
+                        Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
+                    }
                 }
             }
         };

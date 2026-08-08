@@ -11,6 +11,7 @@ If the daemon is not running when you interact with `q` or `schedule`, the clien
 - **Background Queueing**: Queue commands to run asynchronously in the background.
 - **Parallel Execution**: Execute multiple jobs concurrently, up to a configurable limit.
 - **Asynchronous Userland Cron & Scheduler**: Schedule commands with cron expressions, human-readable times (`Wed 10 am`, `weekdays at 8:00 am`), or periodic intervals (`every 5 hours`, `30m`).
+- **Disable & Enable Schedules**: Temporarily disable any scheduled command with `--disable` / `-d` and re-enable it with `--enable` / `-e`.
 - **Power-Off Catch-Up**: Asynchronous catch-up ensures scheduled jobs that were missed while the machine was turned off or asleep run when the daemon resumes.
 - **Start Time & Duration Tracking**: Keep track of start time, duration, and elapsed time since last run.
 - **Execution Log Capture**: Access `stdout` and `stderr` logs for any job at any time.
@@ -74,6 +75,8 @@ schedule <timespec> <command> [args...]
 |---|---|
 | `-l`, `--list` | Lists all scheduled commands, last run time, and elapsed time (default). |
 | `-k`, `--kill <id>` | Removes a scheduled command by ID. |
+| `-d`, `--disable <id>` | Disables a scheduled command (shows `DISABLED` in `NEXT RUN`). |
+| `-e`, `--enable <id>` | Enables a previously disabled scheduled command. |
 | `<timespec> <cmd> [args...]` | Schedules a command for periodic or cron execution. |
 
 ---
@@ -102,6 +105,7 @@ The scheduler supports flexible timespec expressions:
 3. **Periodic Intervals**:
    ```bash
    schedule "every 5 hours" backup.sh
+   schedule "every two minutes" check_metrics.sh
    schedule "every 30 minutes" sync_metrics.sh
    schedule "every 1 day" report.sh
    schedule "5h" quick_sync.sh
@@ -151,14 +155,34 @@ The scheduler supports flexible timespec expressions:
    2   every 5 hours  2026-08-08 07:00:00  4h 50m   2026-08-08 12:00:00  sync_data.sh
    ```
 
-5. **Remove a scheduled command**:
+5. **Disable and Enable scheduled commands**:
+   ```bash
+   # Disable schedule #1
+   schedule --disable 1
+   # or: q --schedule -d 1
+   ```
+   *Output when listing:*
+   ```text
+   ID  TIMESPEC       LAST RUN             ELAPSED  NEXT RUN   COMMAND
+   --------------------------------------------------------------------------------
+   1   Wed 10 am      2026-08-05 10:00:00  3d 1h    DISABLED   backup.sh --all
+   2   every 5 hours  2026-08-08 07:00:00  4h 50m   2026-08-08 12:00:00  sync_data.sh
+   ```
+
+   ```bash
+   # Enable schedule #1
+   schedule --enable 1
+   # or: q --schedule -e 1
+   ```
+
+6. **Remove a scheduled command**:
    ```bash
    schedule --kill 1
    # or
    q --schedule -k 1
    ```
 
-6. **View logs & Kill jobs**:
+7. **View logs & Kill jobs**:
    ```bash
    q --logs 16
    q --kill 18

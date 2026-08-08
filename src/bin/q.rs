@@ -162,6 +162,36 @@ async fn run_schedule_cli(args: &[String]) {
             };
             handle_schedule_kill(schedule_id).await;
             return;
+        } else if arg == "-d" || arg == "--disable" {
+            if idx + 1 >= args.len() {
+                eprintln!("Error: schedule ID is required.");
+                eprintln!("Usage: schedule --disable <id>");
+                std::process::exit(1);
+            }
+            let schedule_id: usize = match args[idx + 1].parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    eprintln!("Error: invalid schedule ID '{}'", args[idx + 1]);
+                    std::process::exit(1);
+                }
+            };
+            handle_schedule_disable(schedule_id).await;
+            return;
+        } else if arg == "-e" || arg == "--enable" {
+            if idx + 1 >= args.len() {
+                eprintln!("Error: schedule ID is required.");
+                eprintln!("Usage: schedule --enable <id>");
+                std::process::exit(1);
+            }
+            let schedule_id: usize = match args[idx + 1].parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    eprintln!("Error: invalid schedule ID '{}'", args[idx + 1]);
+                    std::process::exit(1);
+                }
+            };
+            handle_schedule_enable(schedule_id).await;
+            return;
         } else if arg == "-n" || arg == "--notify" {
             notify_override = Some(true);
             idx += 1;
@@ -214,12 +244,14 @@ fn print_help() {
     println!("Schedule Options (with -s, --schedule, or 'schedule' alias):");
     println!("  -l, --list                  List all scheduled commands (default)");
     println!("  -k, --kill <id>             Remove a scheduled command");
+    println!("  -d, --disable <id>          Disable a scheduled command");
+    println!("  -e, --enable <id>           Enable a scheduled command");
     println!("  <timespec> <cmd> [args...]  Schedule a command for periodic or cron execution");
     println!();
     println!("Timespec Formats:");
     println!("  - Cron syntax:     \"0 12 * * *\", \"*/5 * * * *\", \"0 0 * * 1-5\"");
     println!("  - Human readable:  \"Wed 10 am\", \"daily at 10 am\", \"weekdays at 8:00 am\"");
-    println!("  - Periodic:        \"every 5 hours\", \"every 30 minutes\", \"every 1 day\", \"5h\"");
+    println!("  - Periodic:        \"every 5 hours\", \"every two minutes\", \"every 1 day\", \"5h\"");
 }
 
 fn print_schedule_help() {
@@ -232,6 +264,8 @@ fn print_schedule_help() {
     println!("Options:");
     println!("  -l, --list        List all scheduled commands with last run and elapsed time");
     println!("  -k, --kill <id>   Remove a scheduled command by ID");
+    println!("  -d, --disable <id> Disable a scheduled command");
+    println!("  -e, --enable <id>  Enable a scheduled command");
     println!("  -n, --notify      Force desktop notification when scheduled command finishes");
     println!("  --no-notify       Disable desktop notification for scheduled command");
     println!("  -h, --help        Show this help message");
@@ -239,7 +273,7 @@ fn print_schedule_help() {
     println!("Timespec Formats:");
     println!("  - Cron syntax:     \"0 12 * * *\", \"*/5 * * * *\", \"0 0 * * 1-5\"");
     println!("  - Human readable:  \"Wed 10 am\", \"daily at 10 am\", \"weekdays at 8:00 am\"");
-    println!("  - Periodic:        \"every 5 hours\", \"every 30 minutes\", \"every 1 day\", \"5h\"");
+    println!("  - Periodic:        \"every 5 hours\", \"every two minutes\", \"every 1 day\", \"5h\"");
 }
 
 async fn connect_or_start_daemon() -> ConnectionStream {
@@ -467,6 +501,88 @@ async fn handle_schedule_kill(schedule_id: usize) {
     }
 }
 
+async fn handle_schedule_disable(schedule_id: usize) {
+    let mut stream = connect_or_start_daemon().await;
+
+    let req = Request::ScheduleDisable { schedule_id };
+    let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
+
+    if let Err(e) = stream.write_all(req_str.as_bytes()).await {
+        eprintln!("Error sending request to daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let mut reader = BufReader::new(stream);
+    let mut response_line = String::new();
+    if let Err(e) = reader.read_line(&mut response_line).await {
+        eprintln!("Error reading response from daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let resp: Response = match serde_json::from_str(&response_line) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error parsing response from daemon: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match resp {
+        Response::Ok => {
+            println!("Scheduled command {} disabled successfully.", schedule_id);
+        }
+        Response::Error { message } => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!("Unexpected response from daemon.");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn handle_schedule_enable(schedule_id: usize) {
+    let mut stream = connect_or_start_daemon().await;
+
+    let req = Request::ScheduleEnable { schedule_id };
+    let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
+
+    if let Err(e) = stream.write_all(req_str.as_bytes()).await {
+        eprintln!("Error sending request to daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let mut reader = BufReader::new(stream);
+    let mut response_line = String::new();
+    if let Err(e) = reader.read_line(&mut response_line).await {
+        eprintln!("Error reading response from daemon: {}", e);
+        std::process::exit(1);
+    }
+
+    let resp: Response = match serde_json::from_str(&response_line) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error parsing response from daemon: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match resp {
+        Response::Ok => {
+            println!("Scheduled command {} enabled successfully.", schedule_id);
+        }
+        Response::Error { message } => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!("Unexpected response from daemon.");
+            std::process::exit(1);
+        }
+    }
+}
+
 async fn handle_list() {
     let mut stream = connect_or_start_daemon().await;
 
@@ -681,10 +797,12 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
         };
 
         let next_run_str = if let Some(ref nr) = s.next_run {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(nr) {
+            if nr == "DISABLED" {
+                "DISABLED".to_string()
+            } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(nr) {
                 dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
             } else {
-                "--".to_string()
+                nr.clone()
             }
         } else {
             "--".to_string()
