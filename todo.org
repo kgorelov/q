@@ -1,7 +1,5 @@
 * Features
-
 ** Scheduled commands statuses
-
 ** DONE Rescheduling
 Changing a scheduled command timespec.
 
@@ -12,7 +10,6 @@ schedule --reschedule <jobid> <timespec>
 schedule -r <jobid> <timespec>
 
 The '--reschedule' option implied --schedule, so the <jobid> is the id of a scheduled job.
-
 
 ** DONE Disabling and enabling scheduled commands
 Any scheduled command can be disabled or enabled with the following commands:
@@ -33,6 +30,7 @@ schedule -e <jobid>
 
 When a scheduled command is enabled, it must indicate a proper schedule time to run in the "NEXT RUN" field.
 
+** DONE Recalculate NEXT RUN on re-enabling commands
 ** TODO Color coding in the terminal
 q output:
   - running command: yellow

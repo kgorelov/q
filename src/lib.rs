@@ -243,6 +243,8 @@ pub struct ScheduleSpec {
     pub created_at: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub enabled_at: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

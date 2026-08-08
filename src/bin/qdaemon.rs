@@ -385,8 +385,20 @@ async fn run_queue_manager(
                     .ok()
                     .map(|dt| dt.with_timezone(&chrono::Local))
             });
+            let enabled_at_dt = s.spec.enabled_at.as_ref().and_then(|ea| {
+                chrono::DateTime::parse_from_rfc3339(ea)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Local))
+            });
 
-            if s.spec.parsed.is_due(last_run_dt, created_at, now) {
+            let baseline_dt = match (last_run_dt, enabled_at_dt) {
+                (Some(lr), Some(en)) => Some(if en > lr { en } else { lr }),
+                (None, Some(en)) => Some(en),
+                (Some(lr), None) => Some(lr),
+                (None, None) => None,
+            };
+
+            if s.spec.parsed.is_due(baseline_dt, created_at, now) {
                 let job_id = get_next_job_id(&spool_dir);
                 let job_dir = spool_dir.join(job_id.to_string());
                 if fs::create_dir_all(&job_dir).is_ok() {
@@ -693,6 +705,7 @@ async fn handle_connection(
                                 notify,
                                 created_at,
                                 enabled: true,
+                                enabled_at: None,
                             };
                             if let Err(e) = fs::write(sched_dir.join("spec.json"), serde_json::to_string(&sched_spec).unwrap()) {
                                 Response::Error { message: format!("Failed to write schedule spec: {}", e) }
@@ -719,11 +732,24 @@ async fn handle_connection(
                                 .ok()
                                 .map(|dt| dt.with_timezone(&chrono::Local))
                         });
+                        let enabled_at_dt = s.spec.enabled_at.as_ref().and_then(|ea| {
+                            chrono::DateTime::parse_from_rfc3339(ea)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&chrono::Local))
+                        });
+
+                        let baseline_dt = match (last_run_dt, enabled_at_dt) {
+                            (Some(lr), Some(en)) => Some(if en > lr { en } else { lr }),
+                            (None, Some(en)) => Some(en),
+                            (Some(lr), None) => Some(lr),
+                            (None, None) => None,
+                        };
+
                         let next_run = if !s.spec.enabled {
                             Some("DISABLED".to_string())
                         } else {
                             s.spec.parsed
-                                .next_run(last_run_dt, created_at, now)
+                                .next_run(baseline_dt, created_at, now)
                                 .map(|dt| dt.to_rfc3339())
                         };
 
@@ -797,6 +823,7 @@ async fn handle_connection(
                     };
                     if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
                         sched_spec.enabled = true;
+                        sched_spec.enabled_at = Some(chrono::Local::now().to_rfc3339());
                         if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
                             Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
                         } else {
@@ -833,6 +860,7 @@ async fn handle_connection(
                             if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
                                 sched_spec.timespec = timespec;
                                 sched_spec.parsed = parsed_spec;
+                                sched_spec.enabled_at = Some(chrono::Local::now().to_rfc3339());
                                 if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
                                     Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
                                 } else {
