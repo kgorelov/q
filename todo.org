@@ -32,7 +32,7 @@ When a scheduled command is enabled, it must indicate a proper schedule time to 
 
 ** DONE Recalculate NEXT RUN on re-enabling commands
 ** DONE Immediate run command
-** TODO Color coding in the terminal
+** DONE Color coding in the terminal
 q output:
   - running command: yellow
   - successfuly terminated: green
@@ -42,6 +42,7 @@ schedule:
   - disabled: grey
   - sucessful: green
   - running: yellow
+  - unsuccessful: red
 
 ** GUI
 Qt based GUI.

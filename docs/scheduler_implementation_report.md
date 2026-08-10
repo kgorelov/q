@@ -91,3 +91,23 @@
       • Added last_status: Option<String> to lib.rs with backward-compatible defaults and unit tests.
       • Updated documentation examples in README.md.
 
+////////////////////////////////////////////////////////////////////////////////
+
+  I have implemented the terminal color coding for both q and schedule commands when output is directed to a terminal (and plain text when piped).
+
+  ### Summary of Color Rules
+
+  1. q (Jobs Table) (q.rs):
+      • Yellow (\x1b[33m): Running commands (JobStatus::Running).
+      • Green (\x1b[32m): Successfully finished commands (completed (0)).
+      • Red (\x1b[31m): Unsuccessful commands (non-zero exit code completed (1), failed: ..., or cancelled).
+      • No color: Queued jobs.
+  2. schedule (Schedules Table) (q.rs):
+      • Grey (\x1b[90m): Disabled commands (DISABLED).
+      • Yellow (\x1b[33m): Currently running commands.
+      • Green (\x1b[32m): Successful last run (exit 0).
+      • Red (\x1b[31m): Unsuccessful last run (non-zero exit code exit 1, failed, or cancelled).
+      • No color: Never run before (LAST RUN: --).
+  3. TTY Detection:
+      • Uses std::io::stdout().is_terminal() so colors are automatically omitted when piped to files or other commands.
+

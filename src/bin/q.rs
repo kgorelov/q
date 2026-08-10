@@ -1,10 +1,10 @@
 use std::fs;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use q::{
     get_spool_dir, connect_daemon, ConnectionStream, JobInfoShort,
-    ScheduleInfoShort, Request, Response, format_relative_duration,
+    ScheduleInfoShort, JobStatus, Request, Response, format_relative_duration,
 };
 
 #[cfg(windows)]
@@ -943,8 +943,9 @@ fn print_jobs_table(jobs: &[JobInfoShort]) {
         time_width = max_time_len
     );
 
+    let is_tty = std::io::stdout().is_terminal();
     for (id, status, pid_str, start_str, duration_str, cmd) in formatted_jobs {
-        println!(
+        let line = format!(
             "{:<id_width$}  {:<status_width$}  {:<pid_width$}  {:<start_width$}  {:<time_width$}  {}",
             id, status, pid_str, start_str, duration_str, cmd,
             id_width = max_id_len,
@@ -953,6 +954,43 @@ fn print_jobs_table(jobs: &[JobInfoShort]) {
             start_width = max_start_len,
             time_width = max_time_len
         );
+        if is_tty {
+            let color = match JobStatus::from_str(&status) {
+                JobStatus::Running => "\x1b[33m",
+                JobStatus::Completed { exit_code: 0 } => "\x1b[32m",
+                JobStatus::Completed { .. } | JobStatus::Failed { .. } | JobStatus::Cancelled => "\x1b[31m",
+                _ => "",
+            };
+            if color.is_empty() {
+                println!("{}", line);
+            } else {
+                println!("{}{}\x1b[0m", color, line);
+            }
+        } else {
+            println!("{}", line);
+        }
+    }
+}
+
+fn get_schedule_row_color(s: &ScheduleInfoShort) -> &'static str {
+    if s.next_run.as_deref() == Some("DISABLED") {
+        "\x1b[90m"
+    } else if s.is_running {
+        "\x1b[33m"
+    } else if s.last_run.is_none() {
+        ""
+    } else if let Some(ref status) = s.last_status {
+        if status == "exit 0" {
+            "\x1b[32m"
+        } else if status.starts_with("exit ") || status == "failed" || status == "cancelled" {
+            "\x1b[31m"
+        } else if status == "running" {
+            "\x1b[33m"
+        } else {
+            ""
+        }
+    } else {
+        ""
     }
 }
 
@@ -1044,7 +1082,9 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
         max_elapsed_len = max_elapsed_len.max(elapsed_str.len());
         max_next_run_len = max_next_run_len.max(next_run_str.len());
 
+        let color = get_schedule_row_color(s);
         formatted.push((
+            color,
             s.id,
             s.timespec.clone(),
             last_run_str,
@@ -1073,8 +1113,9 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
         nr_w = max_next_run_len,
     );
 
-    for (id, ts, lr, el, nr, cmd) in formatted {
-        println!(
+    let is_tty = std::io::stdout().is_terminal();
+    for (color, id, ts, lr, el, nr, cmd) in formatted {
+        let line = format!(
             "{:<id_w$}  {:<ts_w$}  {:<lr_w$}  {:<el_w$}  {:<nr_w$}  {}",
             id, ts, lr, el, nr, cmd,
             id_w = max_id_len,
@@ -1083,6 +1124,11 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
             el_w = max_elapsed_len,
             nr_w = max_next_run_len,
         );
+        if is_tty && !color.is_empty() {
+            println!("{}{}\x1b[0m", color, line);
+        } else {
+            println!("{}", line);
+        }
     }
 }
 
