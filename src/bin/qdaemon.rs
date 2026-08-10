@@ -753,23 +753,31 @@ async fn handle_connection(
                                 .map(|dt| dt.to_rfc3339())
                         };
 
-                        let is_running = if let Some(last_job_id) = s.last_job_id {
+                        let (is_running, last_status) = if let Some(last_job_id) = s.last_job_id {
                             if let Some(job) = read_job_info(&spool_dir, last_job_id) {
                                 match job.status {
                                     JobStatus::Running => {
-                                        if let Some(wpid) = job.worker_pid {
+                                        let running = if let Some(wpid) = job.worker_pid {
                                             is_worker_pid_running(wpid)
                                         } else {
                                             false
+                                        };
+                                        if running {
+                                            (true, Some("running".to_string()))
+                                        } else {
+                                            (false, Some("failed".to_string()))
                                         }
                                     }
-                                    _ => false,
+                                    JobStatus::Completed { exit_code } => (false, Some(format!("exit {}", exit_code))),
+                                    JobStatus::Failed { .. } => (false, Some("failed".to_string())),
+                                    JobStatus::Cancelled => (false, Some("cancelled".to_string())),
+                                    JobStatus::Queued => (false, Some("queued".to_string())),
                                 }
                             } else {
-                                false
+                                (false, None)
                             }
                         } else {
-                            false
+                            (false, None)
                         };
 
                         ScheduleInfoShort {
@@ -779,6 +787,7 @@ async fn handle_connection(
                             last_run: s.last_run,
                             next_run,
                             is_running,
+                            last_status,
                         }
                     })
                     .collect();

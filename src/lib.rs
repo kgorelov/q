@@ -295,6 +295,8 @@ pub struct ScheduleInfoShort {
     pub next_run: Option<String>,
     #[serde(default)]
     pub is_running: bool,
+    #[serde(default)]
+    pub last_status: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -447,6 +449,7 @@ mod tests {
         let info: ScheduleInfoShort = serde_json::from_str(json_str).unwrap();
         assert_eq!(info.id, 1);
         assert!(!info.is_running);
+        assert_eq!(info.last_status, None);
     }
 }
 

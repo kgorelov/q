@@ -168,10 +168,10 @@ The scheduler supports flexible timespec expressions:
    ```
    *Output:*
    ```text
-   ID  TIMESPEC       LAST RUN             ELAPSED  NEXT RUN                         COMMAND
-   -------------------------------------------------------------------------------------------------
-   1   Wed 10 am      2026-08-05 10:00:00  3d 1h    2026-08-12 10:00:00 (in 3d 23h)  backup.sh --all
-   2   every 5 hours  2026-08-08 07:00:00  4h 50m   2026-08-08 12:00:00 (in 10m)      sync_data.sh
+   ID  TIMESPEC       LAST RUN                      ELAPSED  NEXT RUN                         COMMAND
+   ----------------------------------------------------------------------------------------------------------
+   1   Wed 10 am      2026-08-05 10:00:00 (exit 0)  3d 1h    2026-08-12 10:00:00 (in 3d 23h)  backup.sh --all
+   2   every 5 hours  2026-08-08 07:00:00 (exit 0)  4h 50m   2026-08-08 12:00:00 (in 10m)      sync_data.sh
    ```
 
 5. **Run a scheduled command immediately**:
@@ -194,10 +194,10 @@ The scheduler supports flexible timespec expressions:
    ```
    *Output when listing:*
    ```text
-   ID  TIMESPEC       LAST RUN             ELAPSED  NEXT RUN                        COMMAND
-   ------------------------------------------------------------------------------------------------
-   1   Wed 10 am      2026-08-05 10:00:00  3d 1h    DISABLED                        backup.sh --all
-   2   every 2 hours  2026-08-08 07:00:00  4h 50m   2026-08-08 09:00:00 (in 1h 10m)  sync_data.sh
+   ID  TIMESPEC       LAST RUN                      ELAPSED  NEXT RUN                        COMMAND
+   ---------------------------------------------------------------------------------------------------------
+   1   Wed 10 am      2026-08-05 10:00:00 (exit 0)  3d 1h    DISABLED                        backup.sh --all
+   2   every 2 hours  2026-08-08 07:00:00 (exit 0)  4h 50m   2026-08-08 09:00:00 (in 1h 10m)  sync_data.sh
    ```
 
    ```bash

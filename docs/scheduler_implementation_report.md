@@ -75,3 +75,19 @@
   4. Documentation (README.md):
       • Updated schedule table examples in README.md to reflect the new output format.
 
+////////////////////////////////////////////////////////////////////////////////
+
+  I have updated the schedule listing display:
+
+  ### Summary of Changes
+
+  1. Moved (running) indicator to LAST RUN (q.rs):
+      • The LAST RUN column now displays (running) when the scheduled task is actively executing (e.g., 2026-08-10 20:00:29 (running)).
+      • The NEXT RUN column strictly shows the countdown to the next scheduled run (e.g., 2026-08-10 20:05:29 (in 5m) or (due)).
+  2. Added Exit Code and Completion Status to LAST RUN (qdaemon.rs, q.rs):
+      • When a command completes, its exit code is appended in parentheses: 2026-08-10 20:00:29 (exit 0) or (exit 1).
+      • Abnormal terminations display (failed) or (cancelled).
+  3. Data Model & Documentation (lib.rs, README.md):
+      • Added last_status: Option<String> to lib.rs with backward-compatible defaults and unit tests.
+      • Updated documentation examples in README.md.
+

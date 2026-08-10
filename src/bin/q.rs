@@ -974,7 +974,28 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
     for s in schedules {
         let last_run_str = if let Some(ref lr) = s.last_run {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(lr) {
-                dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
+                let dt_local = dt.with_timezone(&chrono::Local);
+                let formatted_dt = dt_local.format("%Y-%m-%d %H:%M:%S").to_string();
+
+                let suffix = if s.is_running {
+                    " (running)".to_string()
+                } else if let Some(ref status) = s.last_status {
+                    if status == "running" {
+                        " (running)".to_string()
+                    } else if status == "failed" {
+                        " (failed)".to_string()
+                    } else if status == "cancelled" {
+                        " (cancelled)".to_string()
+                    } else if status.starts_with("exit ") {
+                        format!(" ({})", status)
+                    } else {
+                        "".to_string()
+                    }
+                } else {
+                    "".to_string()
+                };
+
+                format!("{}{}", formatted_dt, suffix)
             } else {
                 "--".to_string()
             }
@@ -1001,16 +1022,12 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
                 let dt_local = dt.with_timezone(&chrono::Local);
                 let formatted_dt = dt_local.format("%Y-%m-%d %H:%M:%S").to_string();
 
-                let suffix = if s.is_running {
-                    "(running)".to_string()
+                let dt_utc = dt.with_timezone(&chrono::Utc);
+                let diff_secs = dt_utc.signed_duration_since(now_utc).num_seconds();
+                let suffix = if diff_secs <= 0 {
+                    "(due)".to_string()
                 } else {
-                    let dt_utc = dt.with_timezone(&chrono::Utc);
-                    let diff_secs = dt_utc.signed_duration_since(now_utc).num_seconds();
-                    if diff_secs <= 0 {
-                        "(due)".to_string()
-                    } else {
-                        format!("(in {})", format_relative_duration(diff_secs))
-                    }
+                    format!("(in {})", format_relative_duration(diff_secs))
                 };
 
                 format!("{} {}", formatted_dt, suffix)
