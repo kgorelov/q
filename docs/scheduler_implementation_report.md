@@ -111,3 +111,23 @@
   3. TTY Detection:
       • Uses std::io::stdout().is_terminal() so colors are automatically omitted when piped to files or other commands.
 
+////////////////////////////////////////////////////////////////////////////////
+
+  I have implemented the --color[=WHEN] option and support for the Q_COLOR environment variable across both q and schedule.
+
+  ### Summary of Changes
+
+  1. **lib.rs**:
+      • Defined lib.rs with Always, Never, and Auto variants.
+      • Parsed values: always, never, auto.
+      • Auto uses std::io::stdout().is_terminal() to colorize output only when connected to a terminal.
+  2. Command Line --color[=WHEN] Option:
+      • Added --color, --color=always, --color=never, --color=auto, and --color <choice> support to both q CLI and schedule CLI in q.rs.
+      • Flag has highest precedence over the environment variable.
+  3. Q_COLOR Environment Variable:
+      • If --color is not specified on the command line, q and schedule inspect Q_COLOR (always, never, auto).
+      • If neither is provided, it defaults to auto.
+  4. Documentation:
+      • Updated print_help() and print_schedule_help() in q.rs.
+      • Updated options tables in README.md.
+      • Updated options and environment sections in man page q.1.

@@ -82,6 +82,7 @@ q -r <jobid> <timespec>
 | `-s`, `--schedule` | Enables scheduling mode. |
 | `-r`, `--run <id>` | Immediately triggers/runs the scheduled command with the specified ID. |
 | `--reschedule <id> <ts>` | Changes the timespec of a scheduled command. |
+| `--color[=WHEN]` | Colorize terminal output: `always`, `never`, or `auto` (default: auto, respects `Q_COLOR`). |
 | `-n`, `--notify` | Force desktop notification on job completion. |
 | `--no-notify` | Disable desktop notification for job completion. |
 | `-h`, `--help` | Prints the help message. |
@@ -96,6 +97,7 @@ q -r <jobid> <timespec>
 | `-e`, `--enable <id>` | Enables a previously disabled scheduled command. |
 | `-r`, `--run <id>` | Runs a scheduled command immediately. |
 | `--reschedule <id> <ts>` | Changes the timespec of an existing scheduled command. |
+| `--color[=WHEN]` | Colorize terminal output: `always`, `never`, or `auto` (default: auto, respects `Q_COLOR`). |
 | `<timespec> <cmd> [args...]` | Schedules a command for periodic or cron execution. |
 
 ---

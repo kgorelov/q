@@ -361,9 +361,50 @@ pub enum Response {
     Error { message: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorChoice {
+    Always,
+    Never,
+    Auto,
+}
+
+impl ColorChoice {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().as_str() {
+            "always" => Ok(ColorChoice::Always),
+            "never" => Ok(ColorChoice::Never),
+            "auto" => Ok(ColorChoice::Auto),
+            _ => Err(format!(
+                "invalid color argument '{}' (valid values: always, never, auto)",
+                s
+            )),
+        }
+    }
+
+    pub fn should_color(self) -> bool {
+        use std::io::IsTerminal;
+        match self {
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+            ColorChoice::Auto => std::io::stdout().is_terminal(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_color_choice_parse() {
+        assert_eq!(ColorChoice::parse("always"), Ok(ColorChoice::Always));
+        assert_eq!(ColorChoice::parse("ALWAYS"), Ok(ColorChoice::Always));
+        assert_eq!(ColorChoice::parse("never"), Ok(ColorChoice::Never));
+        assert_eq!(ColorChoice::parse("NEVER"), Ok(ColorChoice::Never));
+        assert_eq!(ColorChoice::parse("auto"), Ok(ColorChoice::Auto));
+        assert_eq!(ColorChoice::parse("AUTO"), Ok(ColorChoice::Auto));
+        assert!(ColorChoice::parse("invalid").is_err());
+    }
 
     #[test]
     fn test_config_defaults() {

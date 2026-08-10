@@ -135,6 +135,9 @@ Enable scheduling mode. When followed by a timespec and a command, schedules the
 .BR \-l ", lists scheduled commands. When used with " \-k ", " \-d ", " \-e ", " \-r ", or " \-\-reschedule ,
 manages scheduled commands.
 .TP
+.BR \-\-color "[=\fIWHEN\fR]"
+Colorize terminal output: \fBalways\fR, \fBnever\fR, or \fBauto\fR (default is auto).
+.TP
 .BR \-n ", " \-\-notify
 Force sending a desktop notification when the command finishes, regardless of its duration.
 .TP
@@ -143,6 +146,10 @@ Disable desktop notification for the command when it finishes.
 .TP
 .BR \-h ", " \-\-help
 Print a summary of command usage and options.
+.SH ENVIRONMENT
+.TP
+.B Q_COLOR
+Specifies default color mode: \fBalways\fR, \fBnever\fR, or \fBauto\fR. Overridden by the \fB\-\-color\fR option.
 .SH TIMESPEC FORMATS
 The scheduler supports multiple timespec formats:
 .TP

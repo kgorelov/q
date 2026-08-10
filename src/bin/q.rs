@@ -1,10 +1,10 @@
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use q::{
     get_spool_dir, connect_daemon, ConnectionStream, JobInfoShort,
-    ScheduleInfoShort, JobStatus, Request, Response, format_relative_duration,
+    ScheduleInfoShort, JobStatus, ColorChoice, Request, Response, format_relative_duration,
 };
 
 #[cfg(windows)]
@@ -39,9 +39,24 @@ fn spawn_daemon(daemon_exe: &Path) -> std::io::Result<std::process::Child> {
         .spawn()
 }
 
+fn get_env_color_choice() -> ColorChoice {
+    if let Ok(val) = std::env::var("Q_COLOR") {
+        match ColorChoice::parse(&val) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error in Q_COLOR environment variable: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        ColorChoice::Auto
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let env_color = get_env_color_choice();
 
     // Check if invoked as `schedule` alias
     let is_schedule_alias = std::env::args()
@@ -55,16 +70,13 @@ async fn main() {
         .unwrap_or(false);
 
     if is_schedule_alias {
-        run_schedule_cli(&args[1..]).await;
+        run_schedule_cli(&args[1..], env_color).await;
         return;
     }
 
-    if args.len() < 2 {
-        handle_list().await;
-        return;
-    }
-
+    let mut color_choice = env_color;
     let mut notify_override: Option<bool> = None;
+    let mut is_list = false;
     let mut idx = 1;
 
     while idx < args.len() {
@@ -72,9 +84,26 @@ async fn main() {
         if arg == "-h" || arg == "--help" {
             print_help();
             return;
+        } else if arg == "--color" {
+            if idx + 1 < args.len() && (args[idx + 1] == "always" || args[idx + 1] == "never" || args[idx + 1] == "auto") {
+                color_choice = ColorChoice::parse(&args[idx + 1]).unwrap();
+                idx += 2;
+            } else {
+                color_choice = ColorChoice::Always;
+                idx += 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("--color=") {
+            match ColorChoice::parse(val) {
+                Ok(c) => color_choice = c,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            idx += 1;
         } else if arg == "-l" || arg == "--list" {
-            handle_list().await;
-            return;
+            is_list = true;
+            idx += 1;
         } else if arg == "-k" || arg == "--kill" {
             if idx + 1 >= args.len() {
                 eprintln!("Error: job ID is required.");
@@ -158,7 +187,7 @@ async fn main() {
             return;
         } else if arg == "-s" || arg == "--schedule" {
             // Schedule mode via `q --schedule` or `q -s`
-            run_schedule_cli(&args[idx + 1..]).await;
+            run_schedule_cli(&args[idx + 1..], color_choice).await;
             return;
         } else if arg == "-n" || arg == "--notify" {
             notify_override = Some(true);
@@ -171,8 +200,8 @@ async fn main() {
         }
     }
 
-    if idx >= args.len() {
-        handle_list().await;
+    if is_list || idx >= args.len() {
+        handle_list(color_choice.should_color()).await;
         return;
     }
 
@@ -181,13 +210,10 @@ async fn main() {
     handle_queue(cmd, cmd_args, notify_override).await;
 }
 
-async fn run_schedule_cli(args: &[String]) {
-    if args.is_empty() {
-        handle_schedule_list().await;
-        return;
-    }
-
+async fn run_schedule_cli(args: &[String], default_color_choice: ColorChoice) {
+    let mut color_choice = default_color_choice;
     let mut notify_override: Option<bool> = None;
+    let mut is_list = false;
     let mut idx = 0;
 
     while idx < args.len() {
@@ -195,9 +221,26 @@ async fn run_schedule_cli(args: &[String]) {
         if arg == "-h" || arg == "--help" {
             print_schedule_help();
             return;
+        } else if arg == "--color" {
+            if idx + 1 < args.len() && (args[idx + 1] == "always" || args[idx + 1] == "never" || args[idx + 1] == "auto") {
+                color_choice = ColorChoice::parse(&args[idx + 1]).unwrap();
+                idx += 2;
+            } else {
+                color_choice = ColorChoice::Always;
+                idx += 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("--color=") {
+            match ColorChoice::parse(val) {
+                Ok(c) => color_choice = c,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            idx += 1;
         } else if arg == "-l" || arg == "--list" {
-            handle_schedule_list().await;
-            return;
+            is_list = true;
+            idx += 1;
         } else if arg == "-k" || arg == "--kill" {
             if idx + 1 >= args.len() {
                 eprintln!("Error: schedule ID is required.");
@@ -305,8 +348,8 @@ async fn run_schedule_cli(args: &[String]) {
         }
     }
 
-    if idx >= args.len() {
-        handle_schedule_list().await;
+    if is_list || idx >= args.len() {
+        handle_schedule_list(color_choice.should_color()).await;
         return;
     }
 
@@ -341,6 +384,7 @@ fn print_help() {
     println!("  -s, --schedule              Enable scheduling mode (or list scheduled commands)");
     println!("  -r, --run <id>              Run a scheduled command immediately");
     println!("  --reschedule <id> <ts>      Change timespec for a scheduled command");
+    println!("  --color[=WHEN]              Colorize output: 'always', 'never', or 'auto' (default: auto)");
     println!("  -n, --notify                Force desktop notification on job completion");
     println!("  --no-notify                 Disable desktop notification for job completion");
     println!("  -h, --help                  Show this help message");
@@ -352,6 +396,7 @@ fn print_help() {
     println!("  -e, --enable <id>           Enable a scheduled command");
     println!("  -r, --run <id>              Run a scheduled command immediately");
     println!("  --reschedule <id> <ts>      Change timespec for a scheduled command");
+    println!("  --color[=WHEN]              Colorize output: 'always', 'never', or 'auto' (default: auto)");
     println!("  <timespec> <cmd> [args...]  Schedule a command for periodic or cron execution");
     println!();
     println!("Timespec Formats:");
@@ -374,6 +419,7 @@ fn print_schedule_help() {
     println!("  -e, --enable <id>           Enable a scheduled command");
     println!("  -r, --run <id>              Run a scheduled command immediately");
     println!("  --reschedule <id> <ts>      Change timespec for a scheduled command");
+    println!("  --color[=WHEN]              Colorize output: 'always', 'never', or 'auto' (default: auto)");
     println!("  -n, --notify                Force desktop notification when scheduled command finishes");
     println!("  --no-notify                 Disable desktop notification for scheduled command");
     println!("  -h, --help                  Show this help message");
@@ -527,7 +573,7 @@ async fn handle_schedule_add(
     }
 }
 
-async fn handle_schedule_list() {
+async fn handle_schedule_list(should_color: bool) {
     let mut stream = connect_or_start_daemon().await;
 
     let req = Request::ScheduleList;
@@ -555,7 +601,7 @@ async fn handle_schedule_list() {
 
     match resp {
         Response::ScheduleList { schedules } => {
-            print_schedules_table(&schedules);
+            print_schedules_table(&schedules, should_color);
         }
         Response::Error { message } => {
             eprintln!("Error: {}", message);
@@ -781,7 +827,7 @@ async fn handle_schedule_run(schedule_id: usize) {
     }
 }
 
-async fn handle_list() {
+async fn handle_list(should_color: bool) {
     let mut stream = connect_or_start_daemon().await;
 
     let req = Request::List;
@@ -825,7 +871,7 @@ async fn handle_list() {
                 }
             });
 
-            print_jobs_table(&jobs);
+            print_jobs_table(&jobs, should_color);
         }
         Response::Error { message } => {
             eprintln!("Error: {}", message);
@@ -868,7 +914,7 @@ fn format_duration(seconds: i64) -> String {
     }
 }
 
-fn print_jobs_table(jobs: &[JobInfoShort]) {
+fn print_jobs_table(jobs: &[JobInfoShort], should_color: bool) {
     let mut max_id_len = 6;
     let mut max_status_len = 8;
     let mut max_pid_len = 5;
@@ -943,7 +989,6 @@ fn print_jobs_table(jobs: &[JobInfoShort]) {
         time_width = max_time_len
     );
 
-    let is_tty = std::io::stdout().is_terminal();
     for (id, status, pid_str, start_str, duration_str, cmd) in formatted_jobs {
         let line = format!(
             "{:<id_width$}  {:<status_width$}  {:<pid_width$}  {:<start_width$}  {:<time_width$}  {}",
@@ -954,7 +999,7 @@ fn print_jobs_table(jobs: &[JobInfoShort]) {
             start_width = max_start_len,
             time_width = max_time_len
         );
-        if is_tty {
+        if should_color {
             let color = match JobStatus::from_str(&status) {
                 JobStatus::Running => "\x1b[33m",
                 JobStatus::Completed { exit_code: 0 } => "\x1b[32m",
@@ -994,7 +1039,7 @@ fn get_schedule_row_color(s: &ScheduleInfoShort) -> &'static str {
     }
 }
 
-fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
+fn print_schedules_table(schedules: &[ScheduleInfoShort], should_color: bool) {
     if schedules.is_empty() {
         println!("No scheduled commands.");
         return;
@@ -1113,7 +1158,6 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
         nr_w = max_next_run_len,
     );
 
-    let is_tty = std::io::stdout().is_terminal();
     for (color, id, ts, lr, el, nr, cmd) in formatted {
         let line = format!(
             "{:<id_w$}  {:<ts_w$}  {:<lr_w$}  {:<el_w$}  {:<nr_w$}  {}",
@@ -1124,7 +1168,7 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
             el_w = max_elapsed_len,
             nr_w = max_next_run_len,
         );
-        if is_tty && !color.is_empty() {
+        if should_color && !color.is_empty() {
             println!("{}{}\x1b[0m", color, line);
         } else {
             println!("{}", line);
