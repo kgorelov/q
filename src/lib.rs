@@ -1,6 +1,9 @@
+pub mod timespec;
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use timespec::TimeSpec;
 
 fn default_true() -> bool {
     true
@@ -39,6 +42,10 @@ pub fn get_q_dir() -> PathBuf {
 
 pub fn get_spool_dir() -> PathBuf {
     get_q_dir().join("spool")
+}
+
+pub fn get_schedules_dir() -> PathBuf {
+    get_q_dir().join("schedules")
 }
 
 pub fn get_socket_path() -> PathBuf {
@@ -222,6 +229,76 @@ pub struct JobInfo {
     pub end_time: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScheduleSpec {
+    pub id: usize,
+    pub timespec: String,
+    pub parsed: TimeSpec,
+    pub cmd: String,
+    pub args: Vec<String>,
+    pub work_dir: String,
+    pub env: Vec<(String, String)>,
+    #[serde(default)]
+    pub notify: Option<bool>,
+    pub created_at: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub enabled_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScheduleInfo {
+    pub spec: ScheduleSpec,
+    pub last_run: Option<String>,
+    pub last_job_id: Option<usize>,
+}
+
+pub fn format_relative_duration(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "0s".to_string();
+    }
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let mins = (seconds % 3600) / 60;
+    let secs = seconds % 60;
+
+    if days > 0 {
+        if hours > 0 {
+            format!("{}d {}h", days, hours)
+        } else {
+            format!("{}d", days)
+        }
+    } else if hours > 0 {
+        if mins > 0 {
+            format!("{}h {}m", hours, mins)
+        } else {
+            format!("{}h", hours)
+        }
+    } else if mins > 0 {
+        if secs > 0 {
+            format!("{}m {}s", mins, secs)
+        } else {
+            format!("{}m", mins)
+        }
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScheduleInfoShort {
+    pub id: usize,
+    pub timespec: String,
+    pub cmd: String,
+    pub last_run: Option<String>,
+    pub next_run: Option<String>,
+    #[serde(default)]
+    pub is_running: bool,
+    #[serde(default)]
+    pub last_status: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
     Queue {
@@ -235,6 +312,32 @@ pub enum Request {
     List,
     Kill {
         job_id: usize,
+    },
+    Schedule {
+        timespec: String,
+        cmd: String,
+        args: Vec<String>,
+        work_dir: String,
+        env: Vec<(String, String)>,
+        #[serde(default)]
+        notify: Option<bool>,
+    },
+    ScheduleList,
+    ScheduleKill {
+        schedule_id: usize,
+    },
+    ScheduleDisable {
+        schedule_id: usize,
+    },
+    ScheduleEnable {
+        schedule_id: usize,
+    },
+    ScheduleUpdate {
+        schedule_id: usize,
+        timespec: String,
+    },
+    ScheduleRun {
+        schedule_id: usize,
     },
 }
 
@@ -253,12 +356,55 @@ pub enum Response {
     Ok,
     Queued { job_id: usize },
     List { jobs: Vec<JobInfoShort> },
+    Scheduled { schedule_id: usize },
+    ScheduleList { schedules: Vec<ScheduleInfoShort> },
     Error { message: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorChoice {
+    Always,
+    Never,
+    Auto,
+}
+
+impl ColorChoice {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().as_str() {
+            "always" => Ok(ColorChoice::Always),
+            "never" => Ok(ColorChoice::Never),
+            "auto" => Ok(ColorChoice::Auto),
+            _ => Err(format!(
+                "invalid color argument '{}' (valid values: always, never, auto)",
+                s
+            )),
+        }
+    }
+
+    pub fn should_color(self) -> bool {
+        use std::io::IsTerminal;
+        match self {
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+            ColorChoice::Auto => std::io::stdout().is_terminal(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_color_choice_parse() {
+        assert_eq!(ColorChoice::parse("always"), Ok(ColorChoice::Always));
+        assert_eq!(ColorChoice::parse("ALWAYS"), Ok(ColorChoice::Always));
+        assert_eq!(ColorChoice::parse("never"), Ok(ColorChoice::Never));
+        assert_eq!(ColorChoice::parse("NEVER"), Ok(ColorChoice::Never));
+        assert_eq!(ColorChoice::parse("auto"), Ok(ColorChoice::Auto));
+        assert_eq!(ColorChoice::parse("AUTO"), Ok(ColorChoice::Auto));
+        assert!(ColorChoice::parse("invalid").is_err());
+    }
 
     #[test]
     fn test_config_defaults() {
@@ -299,6 +445,52 @@ mod tests {
         let json_str = r#"{"cmd":"sleep","args":["5"],"work_dir":".","env":[],"notify":true}"#;
         let spec: JobSpec = serde_json::from_str(json_str).unwrap();
         assert_eq!(spec.notify, Some(true));
+    }
+
+    #[test]
+    fn test_schedule_request_serialization() {
+        let req = Request::Schedule {
+            timespec: "Wed 10 am".to_string(),
+            cmd: "backup.sh".to_string(),
+            args: vec!["--all".to_string()],
+            work_dir: "/tmp".to_string(),
+            env: vec![("FOO".to_string(), "BAR".to_string())],
+            notify: Some(true),
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&s).unwrap();
+        match parsed {
+            Request::Schedule { timespec, cmd, args, .. } => {
+                assert_eq!(timespec, "Wed 10 am");
+                assert_eq!(cmd, "backup.sh");
+                assert_eq!(args, vec!["--all"]);
+            }
+            _ => panic!("Expected Schedule request"),
+        }
+    }
+
+    #[test]
+    fn test_format_relative_duration() {
+        assert_eq!(format_relative_duration(0), "0s");
+        assert_eq!(format_relative_duration(-5), "0s");
+        assert_eq!(format_relative_duration(45), "45s");
+        assert_eq!(format_relative_duration(60), "1m");
+        assert_eq!(format_relative_duration(330), "5m 30s");
+        assert_eq!(format_relative_duration(3600), "1h");
+        assert_eq!(format_relative_duration(22 * 3600 + 11 * 60), "22h 11m");
+        assert_eq!(format_relative_duration(22 * 3600), "22h");
+        assert_eq!(format_relative_duration(86400 * 2), "2d");
+        assert_eq!(format_relative_duration(86400 + 13 * 3600), "1d 13h");
+        assert_eq!(format_relative_duration(86400 * 3 + 4 * 3600 + 20 * 60 + 10), "3d 4h");
+    }
+
+    #[test]
+    fn test_schedule_info_short_backward_compatibility() {
+        let json_str = r#"{"id":1,"timespec":"@hourly","cmd":"echo 1","last_run":null,"next_run":"2026-08-10T22:00:00Z"}"#;
+        let info: ScheduleInfoShort = serde_json::from_str(json_str).unwrap();
+        assert_eq!(info.id, 1);
+        assert!(!info.is_running);
+        assert_eq!(info.last_status, None);
     }
 }
 

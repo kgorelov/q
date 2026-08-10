@@ -4,8 +4,9 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use q::{
-    get_spool_dir, load_config, ConnectionListener, ConnectionStream,
+    get_schedules_dir, get_spool_dir, load_config, ConnectionListener, ConnectionStream,
     JobInfo, JobInfoShort, JobSpec, JobStatus, Request, Response,
+    ScheduleInfo, ScheduleInfoShort, ScheduleSpec,
 };
 
 #[tokio::main]
@@ -104,7 +105,6 @@ async fn wait_for_shutdown_signals() {
 async fn wait_for_shutdown_signals() {
     let _ = tokio::signal::ctrl_c().await;
 }
-
 
 fn scan_jobs(spool_dir: &Path) -> Vec<JobInfo> {
     let mut jobs = Vec::new();
@@ -210,6 +210,80 @@ fn get_next_job_id(spool_dir: &Path) -> usize {
     max_id + 1
 }
 
+fn scan_schedules(schedules_dir: &Path) -> Vec<ScheduleInfo> {
+    let mut schedules = Vec::new();
+    if let Ok(entries) = fs::read_dir(schedules_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    let name = entry.file_name();
+                    if let Some(name_str) = name.to_str() {
+                        if let Ok(id) = name_str.parse::<usize>() {
+                            if let Some(info) = read_schedule_info(schedules_dir, id) {
+                                schedules.push(info);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    schedules.sort_by_key(|s| s.spec.id);
+    schedules
+}
+
+fn read_schedule_info(schedules_dir: &Path, id: usize) -> Option<ScheduleInfo> {
+    let sched_dir = schedules_dir.join(id.to_string());
+    let spec_path = sched_dir.join("spec.json");
+    if !spec_path.exists() {
+        return None;
+    }
+    let spec_str = fs::read_to_string(&spec_path).ok()?;
+    let spec: ScheduleSpec = serde_json::from_str(&spec_str).ok()?;
+
+    let last_run_path = sched_dir.join("last_run");
+    let last_run = if last_run_path.exists() {
+        fs::read_to_string(&last_run_path).ok().map(|s| s.trim().to_string())
+    } else {
+        None
+    };
+
+    let last_job_id_path = sched_dir.join("last_job_id");
+    let last_job_id = if last_job_id_path.exists() {
+        fs::read_to_string(&last_job_id_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+    } else {
+        None
+    };
+
+    Some(ScheduleInfo {
+        spec,
+        last_run,
+        last_job_id,
+    })
+}
+
+fn get_next_schedule_id(schedules_dir: &Path) -> usize {
+    let mut max_id = 0;
+    if let Ok(entries) = fs::read_dir(schedules_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    if let Some(name_str) = entry.file_name().to_str() {
+                        if let Ok(id) = name_str.parse::<usize>() {
+                            if id > max_id {
+                                max_id = id;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    max_id + 1
+}
+
 fn apply_retention_policy(spool_dir: &Path, max_completed: usize) {
     let mut completed_jobs = Vec::new();
     if let Ok(entries) = fs::read_dir(spool_dir) {
@@ -285,14 +359,70 @@ fn recover_and_monitor_jobs(spool_dir: &Path, tx: mpsc::Sender<()>) -> Vec<usize
 
 async fn run_queue_manager(
     spool_dir: PathBuf,
+    schedules_dir: PathBuf,
     tx: mpsc::Sender<()>,
     mut rx: mpsc::Receiver<()>,
 ) {
     let qdaemon_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("qdaemon"));
 
     loop {
-        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), rx.recv()).await;
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(1), rx.recv()).await;
 
+        // 1. Check and enqueue due scheduled jobs
+        let schedules = scan_schedules(&schedules_dir);
+        let now = chrono::Local::now();
+
+        for s in schedules {
+            if !s.spec.enabled {
+                continue;
+            }
+            let created_at = chrono::DateTime::parse_from_rfc3339(&s.spec.created_at)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Local))
+                .unwrap_or(now);
+            let last_run_dt = s.last_run.as_ref().and_then(|lr| {
+                chrono::DateTime::parse_from_rfc3339(lr)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Local))
+            });
+            let enabled_at_dt = s.spec.enabled_at.as_ref().and_then(|ea| {
+                chrono::DateTime::parse_from_rfc3339(ea)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Local))
+            });
+
+            let baseline_dt = match (last_run_dt, enabled_at_dt) {
+                (Some(lr), Some(en)) => Some(if en > lr { en } else { lr }),
+                (None, Some(en)) => Some(en),
+                (Some(lr), None) => Some(lr),
+                (None, None) => None,
+            };
+
+            if s.spec.parsed.is_due(baseline_dt, created_at, now) {
+                let job_id = get_next_job_id(&spool_dir);
+                let job_dir = spool_dir.join(job_id.to_string());
+                if fs::create_dir_all(&job_dir).is_ok() {
+                    let job_spec = JobSpec {
+                        cmd: s.spec.cmd.clone(),
+                        args: s.spec.args.clone(),
+                        work_dir: s.spec.work_dir.clone(),
+                        env: s.spec.env.clone(),
+                        notify: s.spec.notify,
+                    };
+                    let _ = fs::write(job_dir.join("spec.json"), serde_json::to_string(&job_spec).unwrap());
+                    let _ = fs::write(job_dir.join("status"), "queued");
+                    let cmd_str = format!("{} {}", job_spec.cmd, job_spec.args.join(" "));
+                    let _ = fs::write(job_dir.join("cmd"), cmd_str);
+
+                    let sched_dir = schedules_dir.join(s.spec.id.to_string());
+                    let now_str = now.to_rfc3339();
+                    let _ = fs::write(sched_dir.join("last_run"), &now_str);
+                    let _ = fs::write(sched_dir.join("last_job_id"), job_id.to_string());
+                }
+            }
+        }
+
+        // 2. Process queue
         let config = load_config();
         let jobs = scan_jobs(&spool_dir);
 
@@ -359,7 +489,8 @@ async fn run_queue_manager(
 
 async fn run_daemon() {
     let q_dir = q::get_q_dir();
-    let spool_dir = q::get_spool_dir();
+    let spool_dir = get_spool_dir();
+    let schedules_dir = get_schedules_dir();
     let pid_path = q::get_daemon_pid_path();
 
     #[cfg(unix)]
@@ -369,6 +500,7 @@ async fn run_daemon() {
 
     let _ = fs::create_dir_all(&q_dir);
     let _ = fs::create_dir_all(&spool_dir);
+    let _ = fs::create_dir_all(&schedules_dir);
 
     if lock_file_path.exists() {
         if q::connect_daemon().await.is_ok() {
@@ -400,9 +532,10 @@ async fn run_daemon() {
     };
 
     let spool_dir_clone = spool_dir.clone();
+    let schedules_dir_clone = schedules_dir.clone();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
-        run_queue_manager(spool_dir_clone, tx_clone, rx).await;
+        run_queue_manager(spool_dir_clone, schedules_dir_clone, tx_clone, rx).await;
     });
 
     let lock_file_path_cleanup = lock_file_path.clone();
@@ -422,9 +555,10 @@ async fn run_daemon() {
         match listener.accept().await {
             Ok(stream) => {
                 let spool_dir = spool_dir.clone();
+                let schedules_dir = schedules_dir.clone();
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    handle_connection(stream, spool_dir, tx).await;
+                    handle_connection(stream, spool_dir, schedules_dir, tx).await;
                 });
             }
             Err(e) => {
@@ -437,6 +571,7 @@ async fn run_daemon() {
 async fn handle_connection(
     stream: ConnectionStream,
     spool_dir: PathBuf,
+    schedules_dir: PathBuf,
     tx: mpsc::Sender<()>,
 ) {
     let (reader, mut writer) = tokio::io::split(stream);
@@ -544,6 +679,274 @@ async fn handle_connection(
                         _ => Response::Error {
                             message: format!("Job {} is not active (status: {})", job_id, status),
                         },
+                    }
+                }
+            }
+            Request::Schedule { timespec, cmd, args, work_dir, env, notify } => {
+                match q::timespec::parse_timespec(&timespec) {
+                    Err(e) => {
+                        Response::Error { message: format!("Invalid timespec '{}': {}", timespec, e) }
+                    }
+                    Ok(parsed_spec) => {
+                        let schedule_id = get_next_schedule_id(&schedules_dir);
+                        let sched_dir = schedules_dir.join(schedule_id.to_string());
+                        if let Err(e) = fs::create_dir_all(&sched_dir) {
+                            Response::Error { message: format!("Failed to create schedule directory: {}", e) }
+                        } else {
+                            let created_at = chrono::Local::now().to_rfc3339();
+                            let sched_spec = ScheduleSpec {
+                                id: schedule_id,
+                                timespec,
+                                parsed: parsed_spec,
+                                cmd,
+                                args,
+                                work_dir,
+                                env,
+                                notify,
+                                created_at,
+                                enabled: true,
+                                enabled_at: None,
+                            };
+                            if let Err(e) = fs::write(sched_dir.join("spec.json"), serde_json::to_string(&sched_spec).unwrap()) {
+                                Response::Error { message: format!("Failed to write schedule spec: {}", e) }
+                            } else {
+                                let _ = tx.send(()).await;
+                                Response::Scheduled { schedule_id }
+                            }
+                        }
+                    }
+                }
+            }
+            Request::ScheduleList => {
+                let schedules = scan_schedules(&schedules_dir);
+                let now = chrono::Local::now();
+                let schedules_short: Vec<ScheduleInfoShort> = schedules
+                    .into_iter()
+                    .map(|s| {
+                        let created_at = chrono::DateTime::parse_from_rfc3339(&s.spec.created_at)
+                            .ok()
+                            .map(|dt| dt.with_timezone(&chrono::Local))
+                            .unwrap_or(now);
+                        let last_run_dt = s.last_run.as_ref().and_then(|lr| {
+                            chrono::DateTime::parse_from_rfc3339(lr)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&chrono::Local))
+                        });
+                        let enabled_at_dt = s.spec.enabled_at.as_ref().and_then(|ea| {
+                            chrono::DateTime::parse_from_rfc3339(ea)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&chrono::Local))
+                        });
+
+                        let baseline_dt = match (last_run_dt, enabled_at_dt) {
+                            (Some(lr), Some(en)) => Some(if en > lr { en } else { lr }),
+                            (None, Some(en)) => Some(en),
+                            (Some(lr), None) => Some(lr),
+                            (None, None) => None,
+                        };
+
+                        let next_run = if !s.spec.enabled {
+                            Some("DISABLED".to_string())
+                        } else {
+                            s.spec.parsed
+                                .next_run(baseline_dt, created_at, now)
+                                .map(|dt| dt.to_rfc3339())
+                        };
+
+                        let (is_running, last_status) = if let Some(last_job_id) = s.last_job_id {
+                            if let Some(job) = read_job_info(&spool_dir, last_job_id) {
+                                match job.status {
+                                    JobStatus::Running => {
+                                        let running = if let Some(wpid) = job.worker_pid {
+                                            is_worker_pid_running(wpid)
+                                        } else {
+                                            false
+                                        };
+                                        if running {
+                                            (true, Some("running".to_string()))
+                                        } else {
+                                            (false, Some("failed".to_string()))
+                                        }
+                                    }
+                                    JobStatus::Completed { exit_code } => (false, Some(format!("exit {}", exit_code))),
+                                    JobStatus::Failed { .. } => (false, Some("failed".to_string())),
+                                    JobStatus::Cancelled => (false, Some("cancelled".to_string())),
+                                    JobStatus::Queued => (false, Some("queued".to_string())),
+                                }
+                            } else {
+                                (false, None)
+                            }
+                        } else {
+                            (false, None)
+                        };
+
+                        ScheduleInfoShort {
+                            id: s.spec.id,
+                            timespec: s.spec.timespec,
+                            cmd: format!("{} {}", s.spec.cmd, s.spec.args.join(" ")).trim().to_string(),
+                            last_run: s.last_run,
+                            next_run,
+                            is_running,
+                            last_status,
+                        }
+                    })
+                    .collect();
+                Response::ScheduleList { schedules: schedules_short }
+            }
+            Request::ScheduleKill { schedule_id } => {
+                let sched_dir = schedules_dir.join(schedule_id.to_string());
+                if !sched_dir.exists() {
+                    Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                } else {
+                    let _ = fs::remove_dir_all(&sched_dir);
+                    let _ = tx.send(()).await;
+                    Response::Ok
+                }
+            }
+            Request::ScheduleDisable { schedule_id } => {
+                let sched_dir = schedules_dir.join(schedule_id.to_string());
+                let spec_path = sched_dir.join("spec.json");
+                if !sched_dir.exists() || !spec_path.exists() {
+                    Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                } else {
+                    let spec_str = match fs::read_to_string(&spec_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
+                            if let Ok(resp_str) = serde_json::to_string(&resp) {
+                                let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
+                            }
+                            line.clear();
+                            continue;
+                        }
+                    };
+                    if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
+                        sched_spec.enabled = false;
+                        if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                            Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
+                        } else {
+                            let _ = tx.send(()).await;
+                            Response::Ok
+                        }
+                    } else {
+                        Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
+                    }
+                }
+            }
+            Request::ScheduleEnable { schedule_id } => {
+                let sched_dir = schedules_dir.join(schedule_id.to_string());
+                let spec_path = sched_dir.join("spec.json");
+                if !sched_dir.exists() || !spec_path.exists() {
+                    Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                } else {
+                    let spec_str = match fs::read_to_string(&spec_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
+                            if let Ok(resp_str) = serde_json::to_string(&resp) {
+                                let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
+                            }
+                            line.clear();
+                            continue;
+                        }
+                    };
+                    if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
+                        sched_spec.enabled = true;
+                        sched_spec.enabled_at = Some(chrono::Local::now().to_rfc3339());
+                        if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                            Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
+                        } else {
+                            let _ = tx.send(()).await;
+                            Response::Ok
+                        }
+                    } else {
+                        Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
+                    }
+                }
+            }
+            Request::ScheduleUpdate { schedule_id, timespec } => {
+                match q::timespec::parse_timespec(&timespec) {
+                    Err(e) => {
+                        Response::Error { message: format!("Invalid timespec '{}': {}", timespec, e) }
+                    }
+                    Ok(parsed_spec) => {
+                        let sched_dir = schedules_dir.join(schedule_id.to_string());
+                        let spec_path = sched_dir.join("spec.json");
+                        if !sched_dir.exists() || !spec_path.exists() {
+                            Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                        } else {
+                            let spec_str = match fs::read_to_string(&spec_path) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
+                                    if let Ok(resp_str) = serde_json::to_string(&resp) {
+                                        let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
+                                    }
+                                    line.clear();
+                                    continue;
+                                }
+                            };
+                            if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
+                                sched_spec.timespec = timespec;
+                                sched_spec.parsed = parsed_spec;
+                                sched_spec.enabled_at = Some(chrono::Local::now().to_rfc3339());
+                                if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                                    Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
+                                } else {
+                                    let _ = tx.send(()).await;
+                                    Response::Ok
+                                }
+                            } else {
+                                Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
+                            }
+                        }
+                    }
+                }
+            }
+            Request::ScheduleRun { schedule_id } => {
+                let sched_dir = schedules_dir.join(schedule_id.to_string());
+                let spec_path = sched_dir.join("spec.json");
+                if !sched_dir.exists() || !spec_path.exists() {
+                    Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
+                } else {
+                    let spec_str = match fs::read_to_string(&spec_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
+                            if let Ok(resp_str) = serde_json::to_string(&resp) {
+                                let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
+                            }
+                            line.clear();
+                            continue;
+                        }
+                    };
+                    if let Ok(sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
+                        let job_id = get_next_job_id(&spool_dir);
+                        let job_dir = spool_dir.join(job_id.to_string());
+                        if let Err(e) = fs::create_dir_all(&job_dir) {
+                            Response::Error { message: format!("Failed to create job directory: {}", e) }
+                        } else {
+                            let job_spec = JobSpec {
+                                cmd: sched_spec.cmd.clone(),
+                                args: sched_spec.args.clone(),
+                                work_dir: sched_spec.work_dir.clone(),
+                                env: sched_spec.env.clone(),
+                                notify: sched_spec.notify,
+                            };
+                            let _ = fs::write(job_dir.join("spec.json"), serde_json::to_string(&job_spec).unwrap());
+                            let _ = fs::write(job_dir.join("status"), "queued");
+                            let cmd_str = format!("{} {}", job_spec.cmd, job_spec.args.join(" "));
+                            let _ = fs::write(job_dir.join("cmd"), cmd_str);
+
+                            let now_str = chrono::Local::now().to_rfc3339();
+                            let _ = fs::write(sched_dir.join("last_run"), &now_str);
+                            let _ = fs::write(sched_dir.join("last_job_id"), job_id.to_string());
+
+                            let _ = tx.send(()).await;
+                            Response::Queued { job_id }
+                        }
+                    } else {
+                        Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
                     }
                 }
             }
