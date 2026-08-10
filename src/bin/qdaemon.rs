@@ -753,12 +753,32 @@ async fn handle_connection(
                                 .map(|dt| dt.to_rfc3339())
                         };
 
+                        let is_running = if let Some(last_job_id) = s.last_job_id {
+                            if let Some(job) = read_job_info(&spool_dir, last_job_id) {
+                                match job.status {
+                                    JobStatus::Running => {
+                                        if let Some(wpid) = job.worker_pid {
+                                            is_worker_pid_running(wpid)
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    _ => false,
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
                         ScheduleInfoShort {
                             id: s.spec.id,
                             timespec: s.spec.timespec,
                             cmd: format!("{} {}", s.spec.cmd, s.spec.args.join(" ")).trim().to_string(),
                             last_run: s.last_run,
                             next_run,
+                            is_running,
                         }
                     })
                     .collect();

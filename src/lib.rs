@@ -254,6 +254,38 @@ pub struct ScheduleInfo {
     pub last_job_id: Option<usize>,
 }
 
+pub fn format_relative_duration(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "0s".to_string();
+    }
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let mins = (seconds % 3600) / 60;
+    let secs = seconds % 60;
+
+    if days > 0 {
+        if hours > 0 {
+            format!("{}d {}h", days, hours)
+        } else {
+            format!("{}d", days)
+        }
+    } else if hours > 0 {
+        if mins > 0 {
+            format!("{}h {}m", hours, mins)
+        } else {
+            format!("{}h", hours)
+        }
+    } else if mins > 0 {
+        if secs > 0 {
+            format!("{}m {}s", mins, secs)
+        } else {
+            format!("{}m", mins)
+        }
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ScheduleInfoShort {
     pub id: usize,
@@ -261,6 +293,8 @@ pub struct ScheduleInfoShort {
     pub cmd: String,
     pub last_run: Option<String>,
     pub next_run: Option<String>,
+    #[serde(default)]
+    pub is_running: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -390,6 +424,29 @@ mod tests {
             }
             _ => panic!("Expected Schedule request"),
         }
+    }
+
+    #[test]
+    fn test_format_relative_duration() {
+        assert_eq!(format_relative_duration(0), "0s");
+        assert_eq!(format_relative_duration(-5), "0s");
+        assert_eq!(format_relative_duration(45), "45s");
+        assert_eq!(format_relative_duration(60), "1m");
+        assert_eq!(format_relative_duration(330), "5m 30s");
+        assert_eq!(format_relative_duration(3600), "1h");
+        assert_eq!(format_relative_duration(22 * 3600 + 11 * 60), "22h 11m");
+        assert_eq!(format_relative_duration(22 * 3600), "22h");
+        assert_eq!(format_relative_duration(86400 * 2), "2d");
+        assert_eq!(format_relative_duration(86400 + 13 * 3600), "1d 13h");
+        assert_eq!(format_relative_duration(86400 * 3 + 4 * 3600 + 20 * 60 + 10), "3d 4h");
+    }
+
+    #[test]
+    fn test_schedule_info_short_backward_compatibility() {
+        let json_str = r#"{"id":1,"timespec":"@hourly","cmd":"echo 1","last_run":null,"next_run":"2026-08-10T22:00:00Z"}"#;
+        let info: ScheduleInfoShort = serde_json::from_str(json_str).unwrap();
+        assert_eq!(info.id, 1);
+        assert!(!info.is_running);
     }
 }
 

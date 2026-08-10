@@ -46,3 +46,32 @@
       • q
       • qdaemon
       • schedule (symlink to q)
+
+
+////////////////////////////////////////////////////////////////////////////////
+
+  I have implemented the relative time diff feature for the NEXT RUN field in scheduled command output.
+
+  ### Summary of Changes
+
+  1. Relative Duration Formatting (lib.rs):
+      • Added lib.rs to format durations using the short compact style:
+          • Days + Hours: "(in 1d 13h)" (or "(in 2d)" if hours is 0)
+          • Hours + Minutes: "(in 22h 11m)" (or "(in 22h)" if minutes is 0)
+          • Minutes + Seconds: "(in 5m 30s)" (or "(in 5m)" if seconds is 0)
+          • Seconds: "(in 45s)"
+      • Extended lib.rs with is_running: bool (defaulting to false for backwards compatibility).
+      • Added unit test cases in lib.rs.
+  2. Daemon Status Tracking (qdaemon.rs):
+      • Checked the active status of last_job_id during Request::ScheduleList to set is_running if the job is actively executing.
+  3. Output Formatting (q.rs):
+      • Extended print_schedules_table so the NEXT RUN column displays:
+          • "<date time> (in <diff>)" for future runs.
+          • "<date time> (due)" when now or past due and not currently running.
+          • "<date time> (running)" when the scheduled command is actively running.
+          • "DISABLED" when the schedule is disabled.
+          • "--" when no next run is scheduled.
+
+  4. Documentation (README.md):
+      • Updated schedule table examples in README.md to reflect the new output format.
+

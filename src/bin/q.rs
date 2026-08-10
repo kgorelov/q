@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use q::{
     get_spool_dir, connect_daemon, ConnectionStream, JobInfoShort,
-    ScheduleInfoShort, Request, Response,
+    ScheduleInfoShort, Request, Response, format_relative_duration,
 };
 
 #[cfg(windows)]
@@ -998,7 +998,22 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort]) {
             if nr == "DISABLED" {
                 "DISABLED".to_string()
             } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(nr) {
-                dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
+                let dt_local = dt.with_timezone(&chrono::Local);
+                let formatted_dt = dt_local.format("%Y-%m-%d %H:%M:%S").to_string();
+
+                let suffix = if s.is_running {
+                    "(running)".to_string()
+                } else {
+                    let dt_utc = dt.with_timezone(&chrono::Utc);
+                    let diff_secs = dt_utc.signed_duration_since(now_utc).num_seconds();
+                    if diff_secs <= 0 {
+                        "(due)".to_string()
+                    } else {
+                        format!("(in {})", format_relative_duration(diff_secs))
+                    }
+                };
+
+                format!("{} {}", formatted_dt, suffix)
             } else {
                 nr.clone()
             }
