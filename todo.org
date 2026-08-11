@@ -39,7 +39,7 @@ q output:
   - failed commands: red
 
 schedule:
-  - disabled: grey
+  - disabled: red
   - sucessful: green
   - running: yellow
   - unsuccessful: red

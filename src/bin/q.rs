@@ -990,16 +990,7 @@ fn print_jobs_table(jobs: &[JobInfoShort], should_color: bool) {
     );
 
     for (id, status, pid_str, start_str, duration_str, cmd) in formatted_jobs {
-        let line = format!(
-            "{:<id_width$}  {:<status_width$}  {:<pid_width$}  {:<start_width$}  {:<time_width$}  {}",
-            id, status, pid_str, start_str, duration_str, cmd,
-            id_width = max_id_len,
-            status_width = max_status_len,
-            pid_width = max_pid_len,
-            start_width = max_start_len,
-            time_width = max_time_len
-        );
-        if should_color {
+        let status_display = if should_color {
             let color = match JobStatus::from_str(&status) {
                 JobStatus::Running => "\x1b[33m",
                 JobStatus::Completed { exit_code: 0 } => "\x1b[32m",
@@ -1007,20 +998,27 @@ fn print_jobs_table(jobs: &[JobInfoShort], should_color: bool) {
                 _ => "",
             };
             if color.is_empty() {
-                println!("{}", line);
+                format!("{:<status_width$}", status, status_width = max_status_len)
             } else {
-                println!("{}{}\x1b[0m", color, line);
+                format!("{}{:<status_width$}\x1b[0m", color, status, status_width = max_status_len)
             }
         } else {
-            println!("{}", line);
-        }
+            format!("{:<status_width$}", status, status_width = max_status_len)
+        };
+
+        println!(
+            "{:<id_width$}  {}  {:<pid_width$}  {:<start_width$}  {:<time_width$}  {}",
+            id, status_display, pid_str, start_str, duration_str, cmd,
+            id_width = max_id_len,
+            pid_width = max_pid_len,
+            start_width = max_start_len,
+            time_width = max_time_len
+        );
     }
 }
 
-fn get_schedule_row_color(s: &ScheduleInfoShort) -> &'static str {
-    if s.next_run.as_deref() == Some("DISABLED") {
-        "\x1b[90m"
-    } else if s.is_running {
+fn get_schedule_last_run_color(s: &ScheduleInfoShort) -> &'static str {
+    if s.is_running {
         "\x1b[33m"
     } else if s.last_run.is_none() {
         ""
@@ -1127,7 +1125,7 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort], should_color: bool) {
         max_elapsed_len = max_elapsed_len.max(elapsed_str.len());
         max_next_run_len = max_next_run_len.max(next_run_str.len());
 
-        let color = get_schedule_row_color(s);
+        let color = get_schedule_last_run_color(s);
         formatted.push((
             color,
             s.id,
@@ -1159,20 +1157,25 @@ fn print_schedules_table(schedules: &[ScheduleInfoShort], should_color: bool) {
     );
 
     for (color, id, ts, lr, el, nr, cmd) in formatted {
-        let line = format!(
-            "{:<id_w$}  {:<ts_w$}  {:<lr_w$}  {:<el_w$}  {:<nr_w$}  {}",
-            id, ts, lr, el, nr, cmd,
+        let lr_display = if should_color && !color.is_empty() {
+            format!("{}{:<lr_w$}\x1b[0m", color, lr, lr_w = max_last_run_len)
+        } else {
+            format!("{:<lr_w$}", lr, lr_w = max_last_run_len)
+        };
+
+        let nr_display = if should_color && nr == "DISABLED" {
+            format!("\x1b[31m{:<nr_w$}\x1b[0m", nr, nr_w = max_next_run_len)
+        } else {
+            format!("{:<nr_w$}", nr, nr_w = max_next_run_len)
+        };
+
+        println!(
+            "{:<id_w$}  {:<ts_w$}  {}  {:<el_w$}  {}  {}",
+            id, ts, lr_display, el, nr_display, cmd,
             id_w = max_id_len,
             ts_w = max_timespec_len,
-            lr_w = max_last_run_len,
             el_w = max_elapsed_len,
-            nr_w = max_next_run_len,
         );
-        if should_color && !color.is_empty() {
-            println!("{}{}\x1b[0m", color, line);
-        } else {
-            println!("{}", line);
-        }
     }
 }
 

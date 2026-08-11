@@ -191,9 +191,7 @@ impl JobStatus {
             JobStatus::Cancelled
         } else if s.starts_with("completed") {
             let mut code_str = s.strip_prefix("completed").unwrap().trim();
-            if code_str.starts_with(':') {
-                code_str = code_str.strip_prefix(':').unwrap().trim();
-            }
+            code_str = code_str.trim_matches(|c: char| c == '(' || c == ')' || c == ':').trim();
             let code = code_str.parse::<i32>().unwrap_or(0);
             JobStatus::Completed { exit_code: code }
         } else if s.starts_with("failed") {
@@ -491,6 +489,19 @@ mod tests {
         assert_eq!(info.id, 1);
         assert!(!info.is_running);
         assert_eq!(info.last_status, None);
+    }
+
+    #[test]
+    fn test_job_status_from_str() {
+        assert_eq!(JobStatus::from_str("queued"), JobStatus::Queued);
+        assert_eq!(JobStatus::from_str("running"), JobStatus::Running);
+        assert_eq!(JobStatus::from_str("cancelled"), JobStatus::Cancelled);
+        assert_eq!(JobStatus::from_str("completed (0)"), JobStatus::Completed { exit_code: 0 });
+        assert_eq!(JobStatus::from_str("completed (1)"), JobStatus::Completed { exit_code: 1 });
+        assert_eq!(JobStatus::from_str("completed 0"), JobStatus::Completed { exit_code: 0 });
+        assert_eq!(JobStatus::from_str("completed 127"), JobStatus::Completed { exit_code: 127 });
+        assert_eq!(JobStatus::from_str("completed: 2"), JobStatus::Completed { exit_code: 2 });
+        assert_eq!(JobStatus::from_str("failed: command not found"), JobStatus::Failed { error: "command not found".to_string() });
     }
 }
 
