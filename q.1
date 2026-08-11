@@ -105,8 +105,8 @@ is an alias for
 .BR "q \-\-schedule" .
 .SH OPTIONS
 .TP
-.BR \-l ", " \-\-list
-List all jobs currently in the queue, including their ID, status, PID, start time, elapsed duration, and command. If combined with
+.BR \-l ", " \-\-list " [\fIN\fR]"
+List queued, running, and completed jobs (displaying up to \fIN\fR completed jobs, or default from \fBmax_completed_jobs_to_print\fR in config). If combined with
 .BR \-s " or " \-\-schedule ,
 lists all scheduled commands along with their last run time, elapsed time since last run, next scheduled run, and command.
 .TP
@@ -190,11 +190,14 @@ The configuration options are:
 .B max_parallel_jobs
 The maximum number of jobs allowed to run concurrently (default is 2).
 .TP
-.B max_completed_jobs
-The maximum number of finished jobs retained in the history/spool directory (default is 50).
+.B max_completed_jobs_to_keep
+The maximum number of finished jobs retained in the history/spool directory before oldest records are deleted (default is 50). Legacy alias \fBmax_completed_jobs\fR is also supported.
+.TP
+.B max_completed_jobs_to_print
+The default maximum number of finished jobs displayed by \fBq \-\-list\fR (default is 10).
 .TP
 .B enable_notifications
-Boolean flag to enable or disable desktop notifications globally (default is true). Uses D-Bus on Linux/Unix and Toast Notifications on Windows.
+The boolean flag to enable or disable desktop notifications globally (default is true). Uses D-Bus on Linux/Unix and Toast Notifications on Windows.
 .TP
 .B min_notify_duration_secs
 Minimum execution duration in seconds required for a completed command to trigger a desktop notification (default is 10).

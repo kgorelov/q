@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use q::{
-    get_spool_dir, connect_daemon, ConnectionStream, JobInfoShort,
+    get_spool_dir, connect_daemon, load_config, ConnectionStream, JobInfoShort,
     ScheduleInfoShort, JobStatus, ColorChoice, Request, Response, format_relative_duration,
 };
 
@@ -77,6 +77,7 @@ async fn main() {
     let mut color_choice = env_color;
     let mut notify_override: Option<bool> = None;
     let mut is_list = false;
+    let mut list_limit: Option<usize> = None;
     let mut idx = 1;
 
     while idx < args.len() {
@@ -103,6 +104,38 @@ async fn main() {
             idx += 1;
         } else if arg == "-l" || arg == "--list" {
             is_list = true;
+            if idx + 1 < args.len() {
+                if let Ok(limit) = args[idx + 1].parse::<usize>() {
+                    list_limit = Some(limit);
+                    idx += 2;
+                } else if !args[idx + 1].starts_with('-') {
+                    eprintln!("Error: invalid number of jobs to print '{}'", args[idx + 1]);
+                    std::process::exit(1);
+                } else {
+                    idx += 1;
+                }
+            } else {
+                idx += 1;
+            }
+        } else if let Some(val) = arg.strip_prefix("--list=") {
+            is_list = true;
+            match val.parse::<usize>() {
+                Ok(limit) => list_limit = Some(limit),
+                Err(_) => {
+                    eprintln!("Error: invalid number of jobs to print '{}'", val);
+                    std::process::exit(1);
+                }
+            }
+            idx += 1;
+        } else if let Some(val) = arg.strip_prefix("-l=") {
+            is_list = true;
+            match val.parse::<usize>() {
+                Ok(limit) => list_limit = Some(limit),
+                Err(_) => {
+                    eprintln!("Error: invalid number of jobs to print '{}'", val);
+                    std::process::exit(1);
+                }
+            }
             idx += 1;
         } else if arg == "-k" || arg == "--kill" {
             if idx + 1 >= args.len() {
@@ -201,7 +234,7 @@ async fn main() {
     }
 
     if is_list || idx >= args.len() {
-        handle_list(color_choice.should_color()).await;
+        handle_list(color_choice.should_color(), list_limit).await;
         return;
     }
 
@@ -378,7 +411,7 @@ fn print_help() {
     println!("  schedule <timespec> <command> [args...]");
     println!();
     println!("Options:");
-    println!("  -l, --list                  List all queued, running, and completed jobs");
+    println!("  -l, --list [N]              List queued, running, and completed jobs (up to N completed, default from config)");
     println!("  -k, --kill <id>             Kill a running job or cancel a queued job");
     println!("  -L, --logs <id>             Print stdout and stderr of a job");
     println!("  -s, --schedule              Enable scheduling mode (or list scheduled commands)");
@@ -827,7 +860,7 @@ async fn handle_schedule_run(schedule_id: usize) {
     }
 }
 
-async fn handle_list(should_color: bool) {
+async fn handle_list(should_color: bool, limit_override: Option<usize>) {
     let mut stream = connect_or_start_daemon().await;
 
     let req = Request::List;
@@ -854,14 +887,30 @@ async fn handle_list(should_color: bool) {
     };
 
     match resp {
-        Response::List { mut jobs } => {
-            if jobs.is_empty() {
+        Response::List { jobs } => {
+            let config = load_config();
+            let max_completed = limit_override.unwrap_or(config.max_completed_jobs_to_print);
+
+            let (active_jobs, mut completed_jobs): (Vec<_>, Vec<_>) = jobs
+                .into_iter()
+                .partition(|j| j.status == "running" || j.status == "queued");
+
+            completed_jobs.sort_by_key(|j| j.id);
+            if completed_jobs.len() > max_completed {
+                let drop_count = completed_jobs.len() - max_completed;
+                completed_jobs.drain(0..drop_count);
+            }
+
+            let mut final_jobs = active_jobs;
+            final_jobs.extend(completed_jobs);
+
+            if final_jobs.is_empty() {
                 println!("No jobs in queue.");
                 return;
             }
 
             // Sort jobs: Running (priority 0), Queued (priority 1), others (priority 2), then by ID ascending
-            jobs.sort_by(|a, b| {
+            final_jobs.sort_by(|a, b| {
                 let prio_a = get_status_priority(&a.status);
                 let prio_b = get_status_priority(&b.status);
                 if prio_a != prio_b {
@@ -871,7 +920,7 @@ async fn handle_list(should_color: bool) {
                 }
             });
 
-            print_jobs_table(&jobs, should_color);
+            print_jobs_table(&final_jobs, should_color);
         }
         Response::Error { message } => {
             eprintln!("Error: {}", message);

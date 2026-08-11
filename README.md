@@ -76,7 +76,7 @@ q -r <jobid> <timespec>
 
 | Option | Description |
 |---|---|
-| `-l`, `--list` | Lists all queued, running, and completed jobs (default behavior). |
+| `-l`, `--list [N]` | Lists queued, running, and completed jobs (up to N completed, default from config). |
 | `-k`, `--kill <id>` | Kills a running job or cancels a queued job. |
 | `-L`, `--logs <id>` | Prints the captured stdout and stderr logs for a job. |
 | `-s`, `--schedule` | Enables scheduling mode. |
@@ -235,8 +235,11 @@ The scheduler supports flexible timespec expressions:
 # Maximum number of jobs allowed to run in parallel
 max_parallel_jobs = 3
 
-# Maximum number of finished jobs to keep in history before deleting old records
-max_completed_jobs = 50
+# Maximum number of finished jobs to keep in history/spool before deleting old records (default: 50)
+max_completed_jobs_to_keep = 50
+
+# Default maximum number of finished jobs to display in q --list (default: 10)
+max_completed_jobs_to_print = 10
 
 # Enable desktop notifications for long-running commands (default: true)
 enable_notifications = true

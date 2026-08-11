@@ -483,7 +483,7 @@ async fn run_queue_manager(
             }
         }
 
-        apply_retention_policy(&spool_dir, config.max_completed_jobs);
+        apply_retention_policy(&spool_dir, config.max_completed_jobs_to_keep);
     }
 }
 

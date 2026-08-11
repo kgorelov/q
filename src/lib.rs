@@ -9,14 +9,30 @@ fn default_true() -> bool {
     true
 }
 
+fn default_parallel_jobs() -> usize {
+    2
+}
+
+fn default_max_completed_jobs_to_keep() -> usize {
+    50
+}
+
+fn default_max_completed_jobs_to_print() -> usize {
+    10
+}
+
 fn default_min_notify_duration() -> u64 {
     10
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    #[serde(default = "default_parallel_jobs")]
     pub max_parallel_jobs: usize,
-    pub max_completed_jobs: usize,
+    #[serde(default = "default_max_completed_jobs_to_keep", alias = "max_completed_jobs")]
+    pub max_completed_jobs_to_keep: usize,
+    #[serde(default = "default_max_completed_jobs_to_print")]
+    pub max_completed_jobs_to_print: usize,
     #[serde(default = "default_true")]
     pub enable_notifications: bool,
     #[serde(default = "default_min_notify_duration")]
@@ -27,7 +43,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             max_parallel_jobs: 2,
-            max_completed_jobs: 50,
+            max_completed_jobs_to_keep: 50,
+            max_completed_jobs_to_print: 10,
             enable_notifications: true,
             min_notify_duration_secs: 10,
         }
@@ -408,26 +425,43 @@ mod tests {
     fn test_config_defaults() {
         let toml_str = r#"
             max_parallel_jobs = 4
-            max_completed_jobs = 100
+            max_completed_jobs_to_keep = 100
+            max_completed_jobs_to_print = 20
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.max_parallel_jobs, 4);
-        assert_eq!(config.max_completed_jobs, 100);
+        assert_eq!(config.max_completed_jobs_to_keep, 100);
+        assert_eq!(config.max_completed_jobs_to_print, 20);
         assert!(config.enable_notifications);
         assert_eq!(config.min_notify_duration_secs, 10);
+
+        // Test backward compatibility alias `max_completed_jobs`
+        let legacy_toml = r#"
+            max_parallel_jobs = 3
+            max_completed_jobs = 80
+        "#;
+        let legacy_config: Config = toml::from_str(legacy_toml).unwrap();
+        assert_eq!(legacy_config.max_parallel_jobs, 3);
+        assert_eq!(legacy_config.max_completed_jobs_to_keep, 80);
+        assert_eq!(legacy_config.max_completed_jobs_to_print, 10);
+
+        // Test empty TOML gets all defaults
+        let empty_config: Config = toml::from_str("").unwrap();
+        assert_eq!(empty_config, Config::default());
     }
 
     #[test]
     fn test_config_custom_notification_settings() {
         let toml_str = r#"
             max_parallel_jobs = 2
-            max_completed_jobs = 50
+            max_completed_jobs_to_keep = 50
             enable_notifications = false
             min_notify_duration_secs = 5
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(!config.enable_notifications);
         assert_eq!(config.min_notify_duration_secs, 5);
+        assert_eq!(config.max_completed_jobs_to_print, 10);
     }
 
     #[test]
