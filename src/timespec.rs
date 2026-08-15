@@ -91,14 +91,11 @@ impl CronSchedule {
         None
     }
 
-    pub fn prev_run(&self, before: DateTime<Local>) -> Option<DateTime<Local>> {
-        let mut current = before
+    /// Return the latest scheduled run at or before `at`.
+    pub fn prev_run(&self, at: DateTime<Local>) -> Option<DateTime<Local>> {
+        let mut current = at
             .with_second(0)?
             .with_nanosecond(0)?;
-
-        if before.second() == 0 && before.nanosecond() == 0 {
-            current = current - Duration::minutes(1);
-        }
 
         // Search backward up to 5 years (in minutes)
         for _ in 0..(5 * 366 * 24 * 60) {
@@ -174,7 +171,7 @@ impl TimeSpec {
             }
             TimeSpec::Cron(cron) => {
                 // Find latest scheduled run at or before `now`
-                if let Some(prev) = cron.prev_run(now + Duration::seconds(1)) {
+                if let Some(prev) = cron.prev_run(now) {
                     match last_run {
                         Some(lr) => prev > lr,
                         None => {
@@ -1031,6 +1028,44 @@ mod tests {
             }
             _ => panic!("Expected cron"),
         }
+    }
+
+    #[test]
+    fn test_cron_due_boundary_is_inclusive_without_early_trigger() {
+        let daily = parse_timespec("daily 8:30").unwrap();
+
+        let created_at = chrono::NaiveDate::from_ymd_opt(2026, 8, 13)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .single()
+            .unwrap();
+        let just_before = chrono::NaiveDate::from_ymd_opt(2026, 8, 14)
+            .unwrap()
+            .and_hms_nano_opt(8, 29, 59, 999_999_999)
+            .unwrap()
+            .and_local_timezone(Local)
+            .single()
+            .unwrap();
+        let exactly_at = chrono::NaiveDate::from_ymd_opt(2026, 8, 14)
+            .unwrap()
+            .and_hms_nano_opt(8, 30, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .single()
+            .unwrap();
+        let just_after = chrono::NaiveDate::from_ymd_opt(2026, 8, 14)
+            .unwrap()
+            .and_hms_nano_opt(8, 30, 0, 1)
+            .unwrap()
+            .and_local_timezone(Local)
+            .single()
+            .unwrap();
+
+        assert!(!daily.is_due(None, created_at, just_before));
+        assert!(daily.is_due(None, created_at, exactly_at));
+        assert!(!daily.is_due(Some(exactly_at), created_at, just_after));
     }
 
     #[test]
