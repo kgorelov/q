@@ -1,3 +1,4 @@
+pub mod logging;
 pub mod timespec;
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,54 @@ fn default_min_notify_duration() -> u64 {
     10
 }
 
+fn default_max_log_files() -> usize {
+    5
+}
+
+pub fn deserialize_opt_string_or_int<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptStringOrIntVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for OptStringOrIntVisitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string, integer, or none")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+    }
+
+    deserializer.deserialize_option(OptStringOrIntVisitor)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     #[serde(default = "default_parallel_jobs")]
@@ -37,6 +86,22 @@ pub struct Config {
     pub enable_notifications: bool,
     #[serde(default = "default_min_notify_duration")]
     pub min_notify_duration_secs: u64,
+    #[serde(default = "default_max_log_files")]
+    pub max_log_files: usize,
+    #[serde(default, deserialize_with = "deserialize_opt_string_or_int")]
+    pub max_log_file_age: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_or_int")]
+    pub max_log_file_size: Option<String>,
+}
+
+impl Config {
+    pub fn parsed_max_log_file_age_secs(&self) -> Option<u64> {
+        self.max_log_file_age.as_deref().and_then(logging::parse_age_str)
+    }
+
+    pub fn parsed_max_log_file_size_bytes(&self) -> Option<u64> {
+        self.max_log_file_size.as_deref().and_then(logging::parse_size_str)
+    }
 }
 
 impl Default for Config {
@@ -47,6 +112,9 @@ impl Default for Config {
             max_completed_jobs_to_print: 10,
             enable_notifications: true,
             min_notify_duration_secs: 10,
+            max_log_files: 5,
+            max_log_file_age: None,
+            max_log_file_size: None,
         }
     }
 }
@@ -55,6 +123,10 @@ pub fn get_q_dir() -> PathBuf {
     dirs::home_dir()
         .map(|p| p.join(".q"))
         .unwrap_or_else(|| PathBuf::from(".q"))
+}
+
+pub fn get_daemon_log_path() -> PathBuf {
+    get_q_dir().join("qdaemon.log")
 }
 
 pub fn get_spool_dir() -> PathBuf {
@@ -462,6 +534,37 @@ mod tests {
         assert!(!config.enable_notifications);
         assert_eq!(config.min_notify_duration_secs, 5);
         assert_eq!(config.max_completed_jobs_to_print, 10);
+        assert_eq!(config.max_log_files, 5);
+        assert_eq!(config.max_log_file_age, None);
+        assert_eq!(config.max_log_file_size, None);
+    }
+
+    #[test]
+    fn test_config_logging_settings() {
+        let toml_str = r#"
+            max_log_files = 10
+            max_log_file_age = "1w"
+            max_log_file_size = "200mb"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.max_log_files, 10);
+        assert_eq!(config.max_log_file_age, Some("1w".to_string()));
+        assert_eq!(config.max_log_file_size, Some("200mb".to_string()));
+        assert_eq!(config.parsed_max_log_file_age_secs(), Some(604800));
+        assert_eq!(config.parsed_max_log_file_size_bytes(), Some(200 * 1024 * 1024));
+
+        // Test with integer values in TOML
+        let toml_int_str = r#"
+            max_log_files = 3
+            max_log_file_age = 86400
+            max_log_file_size = 10485760
+        "#;
+        let config_int: Config = toml::from_str(toml_int_str).unwrap();
+        assert_eq!(config_int.max_log_files, 3);
+        assert_eq!(config_int.max_log_file_age, Some("86400".to_string()));
+        assert_eq!(config_int.max_log_file_size, Some("10485760".to_string()));
+        assert_eq!(config_int.parsed_max_log_file_age_secs(), Some(86400));
+        assert_eq!(config_int.parsed_max_log_file_size_bytes(), Some(10485760));
     }
 
     #[test]

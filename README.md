@@ -246,6 +246,15 @@ enable_notifications = true
 
 # Minimum duration in seconds a command must run before triggering a completion notification (default: 10)
 min_notify_duration_secs = 10
+
+# Maximum number of rotated log files to keep (default: 5)
+max_log_files = 5
+
+# Rotate the log file if older than duration (e.g. "1w", "24h", "30m", "1y")
+# max_log_file_age = "1w"
+
+# Rotate the log file if bigger than size (e.g. "200mb", "500kb", "1gb")
+# max_log_file_size = "200mb"
 ```
 
 ---
@@ -254,6 +263,7 @@ min_notify_duration_secs = 10
 
 - **Auto-Daemon Start**: The client automatically starts `qdaemon` if it is not already running.
 - **State Storage**:
+  - `~/.q/qdaemon.log`: Main daemon log file, automatically rotated (`qdaemon.log.1`, `qdaemon.log.2`, etc.).
   - `~/.q/spool/<job_id>/`: Metadata (`spec.json`, `status`, `start_time`, `end_time`) and captured process streams (`stdout`, `stderr`).
   - `~/.q/schedules/<schedule_id>/`: Schedule metadata (`spec.json`), tracking timestamps (`last_run`), and last triggered job IDs (`last_job_id`).
 - **Asynchronous Catch-Up**: When `qdaemon` starts or ticks, it computes whether any scheduled run was missed and automatically enqueues it.
