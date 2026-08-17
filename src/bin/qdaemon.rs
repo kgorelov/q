@@ -7,6 +7,7 @@ use q::{
     get_schedules_dir, get_spool_dir, load_config, ConnectionListener, ConnectionStream,
     JobInfo, JobInfoShort, JobSpec, JobStatus, Request, Response,
     ScheduleInfo, ScheduleInfoShort, ScheduleSpec,
+    log_debug, log_error, log_info, log_warn,
 };
 
 #[tokio::main]
@@ -301,7 +302,7 @@ fn apply_retention_policy(spool_dir: &Path, max_completed: usize) {
                                         JobStatus::Completed { .. }
                                         | JobStatus::Failed { .. }
                                         | JobStatus::Cancelled => {
-                                            completed_jobs.push(id);
+                                             completed_jobs.push(id);
                                         }
                                         _ => {}
                                     }
@@ -321,6 +322,7 @@ fn apply_retention_policy(spool_dir: &Path, max_completed: usize) {
             let job_dir = spool_dir.join(id.to_string());
             let _ = fs::remove_dir_all(job_dir);
         }
+        log_info!("Pruned {} completed job(s) from spool to maintain retention limit ({})", to_remove, max_completed);
     }
 }
 
@@ -351,6 +353,7 @@ fn recover_and_monitor_jobs(spool_dir: &Path, tx: mpsc::Sender<()>) -> Vec<usize
                 let _ = fs::write(job_dir.join("end_time"), &end_time);
                 let _ = fs::remove_file(job_dir.join("pid"));
                 let _ = fs::remove_file(job_dir.join("worker_pid"));
+                log_warn!("Job #{} marked failed: process died while daemon was offline", job.id);
             }
         }
     }
@@ -367,6 +370,11 @@ async fn run_queue_manager(
 
     loop {
         let _ = tokio::time::timeout(tokio::time::Duration::from_secs(1), rx.recv()).await;
+
+        let config = load_config();
+
+        // Check log rotation
+        q::logging::check_and_rotate(&config);
 
         // 1. Check and enqueue due scheduled jobs
         let schedules = scan_schedules(&schedules_dir);
@@ -412,18 +420,19 @@ async fn run_queue_manager(
                     let _ = fs::write(job_dir.join("spec.json"), serde_json::to_string(&job_spec).unwrap());
                     let _ = fs::write(job_dir.join("status"), "queued");
                     let cmd_str = format!("{} {}", job_spec.cmd, job_spec.args.join(" "));
-                    let _ = fs::write(job_dir.join("cmd"), cmd_str);
+                    let _ = fs::write(job_dir.join("cmd"), &cmd_str);
 
                     let sched_dir = schedules_dir.join(s.spec.id.to_string());
                     let now_str = now.to_rfc3339();
                     let _ = fs::write(sched_dir.join("last_run"), &now_str);
                     let _ = fs::write(sched_dir.join("last_job_id"), job_id.to_string());
+
+                    log_info!("Schedule #{} is due; queued job #{} ('{}')", s.spec.id, job_id, cmd_str.trim());
                 }
             }
         }
 
         // 2. Process queue
-        let config = load_config();
         let jobs = scan_jobs(&spool_dir);
 
         let mut running_count = 0;
@@ -447,6 +456,7 @@ async fn run_queue_manager(
                         let _ = fs::write(job_dir.join("end_time"), &end_time);
                         let _ = fs::remove_file(job_dir.join("pid"));
                         let _ = fs::remove_file(job_dir.join("worker_pid"));
+                        log_warn!("Job #{} marked failed: process died while daemon was offline", job.id);
                     }
                 }
                 JobStatus::Queued => {
@@ -460,6 +470,8 @@ async fn run_queue_manager(
             let limit = config.max_parallel_jobs - running_count;
             for job in queued_jobs.into_iter().take(limit) {
                 let job_dir = spool_dir.join(job.id.to_string());
+                let job_id = job.id;
+                let cmd_str = format!("{} {}", job.spec.cmd, job.spec.args.join(" ")).trim().to_string();
 
                 match tokio::process::Command::new(&qdaemon_exe)
                     .arg("--worker")
@@ -470,14 +482,18 @@ async fn run_queue_manager(
                     .spawn()
                 {
                     Ok(mut child) => {
+                        log_info!("Job #{} started: '{}' (worker spawned)", job_id, cmd_str);
                         let tx_clone = tx.clone();
                         tokio::spawn(async move {
                             let _ = child.wait().await;
+                            log_debug!("Job #{} worker child process exited", job_id);
                             let _ = tx_clone.send(()).await;
                         });
                     }
                     Err(e) => {
-                        let _ = fs::write(job_dir.join("status"), format!("failed: cannot spawn worker: {}", e));
+                        let err_msg = format!("failed: cannot spawn worker: {}", e);
+                        log_error!("Job #{} failed to spawn worker: {}", job_id, e);
+                        let _ = fs::write(job_dir.join("status"), &err_msg);
                     }
                 }
             }
@@ -505,6 +521,7 @@ async fn run_daemon() {
     if lock_file_path.exists() {
         if q::connect_daemon().await.is_ok() {
             eprintln!("qdaemon is already running.");
+            log_error!("qdaemon is already running, exiting.");
             std::process::exit(1);
         } else {
             let _ = fs::remove_file(&lock_file_path);
@@ -514,18 +531,28 @@ async fn run_daemon() {
     let my_pid = std::process::id();
     if let Err(e) = fs::write(&pid_path, my_pid.to_string()) {
         eprintln!("Failed to write daemon pid file: {}", e);
+        log_error!("Failed to write daemon pid file: {}", e);
         std::process::exit(1);
     }
+
+    log_info!("qdaemon starting (PID: {}, lock file: {:?})", my_pid, lock_file_path);
 
     let (tx, rx) = mpsc::channel::<()>(100);
 
     let active_orphans = recover_and_monitor_jobs(&spool_dir, tx.clone());
-    println!("Recovered {} running orphaned jobs", active_orphans.len());
+    if active_orphans.is_empty() {
+        log_info!("Recovered 0 running orphaned jobs");
+        println!("Recovered 0 running orphaned jobs");
+    } else {
+        log_info!("Recovered {} running orphaned jobs: {:?}", active_orphans.len(), active_orphans);
+        println!("Recovered {} running orphaned jobs", active_orphans.len());
+    }
 
     let listener = match ConnectionListener::bind().await {
         Ok(l) => l,
         Err(e) => {
             eprintln!("Failed to bind: {}", e);
+            log_error!("Failed to bind: {}", e);
             let _ = fs::remove_file(&pid_path);
             std::process::exit(1);
         }
@@ -542,12 +569,15 @@ async fn run_daemon() {
     let pid_path_cleanup = pid_path.clone();
     tokio::spawn(async move {
         wait_for_shutdown_signals().await;
+        log_info!("Shutting down daemon on signal...");
         println!("Shutting down daemon...");
         let _ = fs::remove_file(&lock_file_path_cleanup);
         let _ = fs::remove_file(&pid_path_cleanup);
+        log_info!("qdaemon stopped.");
         std::process::exit(0);
     });
 
+    log_info!("qdaemon started and listening on {:?}", lock_file_path);
     println!("qdaemon started and listening on {:?}", lock_file_path);
     let _ = tx.send(()).await;
 
@@ -563,6 +593,7 @@ async fn run_daemon() {
             }
             Err(e) => {
                 eprintln!("Error accepting connection: {}", e);
+                log_error!("Error accepting connection: {}", e);
             }
         }
     }
@@ -586,6 +617,7 @@ async fn handle_connection(
         let req: Request = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
+                log_warn!("Invalid request JSON received: {}", e);
                 let resp = Response::Error { message: format!("Invalid request JSON: {}", e) };
                 if let Ok(resp_str) = serde_json::to_string(&resp) {
                     let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
@@ -600,6 +632,7 @@ async fn handle_connection(
                 let job_id = get_next_job_id(&spool_dir);
                 let job_dir = spool_dir.join(job_id.to_string());
                 if let Err(e) = fs::create_dir_all(&job_dir) {
+                    log_error!("Failed to create job directory for job #{}: {}", job_id, e);
                     Response::Error { message: format!("Failed to create job directory: {}", e) }
                 } else {
                     let spec = JobSpec { cmd, args, work_dir, env, notify };
@@ -607,13 +640,16 @@ async fn handle_connection(
                     let status_path = job_dir.join("status");
 
                     if let Err(e) = fs::write(&spec_path, serde_json::to_string(&spec).unwrap()) {
+                        log_error!("Failed to write spec.json for job #{}: {}", job_id, e);
                         Response::Error { message: format!("Failed to write spec.json: {}", e) }
                     } else if let Err(e) = fs::write(&status_path, "queued") {
+                        log_error!("Failed to write status for job #{}: {}", job_id, e);
                         Response::Error { message: format!("Failed to write status: {}", e) }
                     } else {
-                        let cmd_str = format!("{} {}", spec.cmd, spec.args.join(" "));
-                        let _ = fs::write(job_dir.join("cmd"), cmd_str);
+                        let cmd_str = format!("{} {}", spec.cmd, spec.args.join(" ")).trim().to_string();
+                        let _ = fs::write(job_dir.join("cmd"), &cmd_str);
 
+                        log_info!("Job #{} queued: '{}' (work_dir: '{}', notify: {:?})", job_id, cmd_str, spec.work_dir, spec.notify);
                         let _ = tx.send(()).await;
                         Response::Queued { job_id }
                     }
@@ -637,6 +673,7 @@ async fn handle_connection(
             Request::Kill { job_id } => {
                 let job_dir = spool_dir.join(job_id.to_string());
                 if !job_dir.exists() {
+                    log_warn!("Kill request rejected: Job #{} does not exist", job_id);
                     Response::Error { message: format!("Job {} does not exist", job_id) }
                 } else {
                     let status_path = job_dir.join("status");
@@ -646,6 +683,7 @@ async fn handle_connection(
                     match status {
                         JobStatus::Queued => {
                             let _ = fs::write(&status_path, "cancelled");
+                            log_info!("Job #{} cancelled (was queued)", job_id);
                             let _ = tx.send(()).await;
                             Response::Ok
                         }
@@ -673,33 +711,39 @@ async fn handle_connection(
                             let _ = fs::remove_file(pid_path);
                             let _ = fs::remove_file(worker_pid_path);
 
+                            log_info!("Job #{} killed (pid: {:?}, worker_pid: {:?})", job_id, pid, wpid);
                             let _ = tx.send(()).await;
                             Response::Ok
                         }
-                        _ => Response::Error {
-                            message: format!("Job {} is not active (status: {})", job_id, status),
-                        },
+                        _ => {
+                            log_warn!("Kill request rejected: Job #{} is not active (status: {})", job_id, status);
+                            Response::Error {
+                                message: format!("Job {} is not active (status: {})", job_id, status),
+                            }
+                        }
                     }
                 }
             }
             Request::Schedule { timespec, cmd, args, work_dir, env, notify } => {
                 match q::timespec::parse_timespec(&timespec) {
                     Err(e) => {
+                        log_warn!("Schedule request failed with invalid timespec '{}': {}", timespec, e);
                         Response::Error { message: format!("Invalid timespec '{}': {}", timespec, e) }
                     }
                     Ok(parsed_spec) => {
                         let schedule_id = get_next_schedule_id(&schedules_dir);
                         let sched_dir = schedules_dir.join(schedule_id.to_string());
                         if let Err(e) = fs::create_dir_all(&sched_dir) {
+                            log_error!("Failed to create schedule directory for schedule #{}: {}", schedule_id, e);
                             Response::Error { message: format!("Failed to create schedule directory: {}", e) }
                         } else {
                             let created_at = chrono::Local::now().to_rfc3339();
                             let sched_spec = ScheduleSpec {
                                 id: schedule_id,
-                                timespec,
+                                timespec: timespec.clone(),
                                 parsed: parsed_spec,
-                                cmd,
-                                args,
+                                cmd: cmd.clone(),
+                                args: args.clone(),
                                 work_dir,
                                 env,
                                 notify,
@@ -708,8 +752,11 @@ async fn handle_connection(
                                 enabled_at: None,
                             };
                             if let Err(e) = fs::write(sched_dir.join("spec.json"), serde_json::to_string(&sched_spec).unwrap()) {
+                                log_error!("Failed to write schedule spec for schedule #{}: {}", schedule_id, e);
                                 Response::Error { message: format!("Failed to write schedule spec: {}", e) }
                             } else {
+                                let cmd_str = format!("{} {}", cmd, args.join(" ")).trim().to_string();
+                                log_info!("Schedule #{} created: timespec='{}', command='{}'", schedule_id, timespec, cmd_str);
                                 let _ = tx.send(()).await;
                                 Response::Scheduled { schedule_id }
                             }
@@ -796,9 +843,11 @@ async fn handle_connection(
             Request::ScheduleKill { schedule_id } => {
                 let sched_dir = schedules_dir.join(schedule_id.to_string());
                 if !sched_dir.exists() {
+                    log_warn!("Schedule kill rejected: Schedule #{} does not exist", schedule_id);
                     Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
                 } else {
                     let _ = fs::remove_dir_all(&sched_dir);
+                    log_info!("Schedule #{} removed", schedule_id);
                     let _ = tx.send(()).await;
                     Response::Ok
                 }
@@ -807,11 +856,13 @@ async fn handle_connection(
                 let sched_dir = schedules_dir.join(schedule_id.to_string());
                 let spec_path = sched_dir.join("spec.json");
                 if !sched_dir.exists() || !spec_path.exists() {
+                    log_warn!("Schedule disable rejected: Schedule #{} does not exist", schedule_id);
                     Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
                 } else {
                     let spec_str = match fs::read_to_string(&spec_path) {
                         Ok(s) => s,
                         Err(e) => {
+                            log_error!("Cannot read schedule #{}: {}", schedule_id, e);
                             let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
                             if let Ok(resp_str) = serde_json::to_string(&resp) {
                                 let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
@@ -823,12 +874,15 @@ async fn handle_connection(
                     if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
                         sched_spec.enabled = false;
                         if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                            log_error!("Failed to update schedule #{}: {}", schedule_id, e);
                             Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
                         } else {
+                            log_info!("Schedule #{} disabled", schedule_id);
                             let _ = tx.send(()).await;
                             Response::Ok
                         }
                     } else {
+                        log_error!("Failed to parse schedule #{}", schedule_id);
                         Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
                     }
                 }
@@ -837,11 +891,13 @@ async fn handle_connection(
                 let sched_dir = schedules_dir.join(schedule_id.to_string());
                 let spec_path = sched_dir.join("spec.json");
                 if !sched_dir.exists() || !spec_path.exists() {
+                    log_warn!("Schedule enable rejected: Schedule #{} does not exist", schedule_id);
                     Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
                 } else {
                     let spec_str = match fs::read_to_string(&spec_path) {
                         Ok(s) => s,
                         Err(e) => {
+                            log_error!("Cannot read schedule #{}: {}", schedule_id, e);
                             let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
                             if let Ok(resp_str) = serde_json::to_string(&resp) {
                                 let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
@@ -854,12 +910,15 @@ async fn handle_connection(
                         sched_spec.enabled = true;
                         sched_spec.enabled_at = Some(chrono::Local::now().to_rfc3339());
                         if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                            log_error!("Failed to update schedule #{}: {}", schedule_id, e);
                             Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
                         } else {
+                            log_info!("Schedule #{} enabled", schedule_id);
                             let _ = tx.send(()).await;
                             Response::Ok
                         }
                     } else {
+                        log_error!("Failed to parse schedule #{}", schedule_id);
                         Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
                     }
                 }
@@ -867,17 +926,20 @@ async fn handle_connection(
             Request::ScheduleUpdate { schedule_id, timespec } => {
                 match q::timespec::parse_timespec(&timespec) {
                     Err(e) => {
+                        log_warn!("Schedule update failed with invalid timespec '{}': {}", timespec, e);
                         Response::Error { message: format!("Invalid timespec '{}': {}", timespec, e) }
                     }
                     Ok(parsed_spec) => {
                         let sched_dir = schedules_dir.join(schedule_id.to_string());
                         let spec_path = sched_dir.join("spec.json");
                         if !sched_dir.exists() || !spec_path.exists() {
+                            log_warn!("Schedule update rejected: Schedule #{} does not exist", schedule_id);
                             Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
                         } else {
                             let spec_str = match fs::read_to_string(&spec_path) {
                                 Ok(s) => s,
                                 Err(e) => {
+                                    log_error!("Cannot read schedule #{}: {}", schedule_id, e);
                                     let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
                                     if let Ok(resp_str) = serde_json::to_string(&resp) {
                                         let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
@@ -887,16 +949,19 @@ async fn handle_connection(
                                 }
                             };
                             if let Ok(mut sched_spec) = serde_json::from_str::<ScheduleSpec>(&spec_str) {
-                                sched_spec.timespec = timespec;
+                                sched_spec.timespec = timespec.clone();
                                 sched_spec.parsed = parsed_spec;
                                 sched_spec.enabled_at = Some(chrono::Local::now().to_rfc3339());
                                 if let Err(e) = fs::write(&spec_path, serde_json::to_string(&sched_spec).unwrap()) {
+                                    log_error!("Failed to update schedule #{}: {}", schedule_id, e);
                                     Response::Error { message: format!("Failed to update schedule {}: {}", schedule_id, e) }
                                 } else {
+                                    log_info!("Schedule #{} updated: timespec='{}'", schedule_id, timespec);
                                     let _ = tx.send(()).await;
                                     Response::Ok
                                 }
                             } else {
+                                log_error!("Failed to parse schedule #{}", schedule_id);
                                 Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
                             }
                         }
@@ -907,11 +972,13 @@ async fn handle_connection(
                 let sched_dir = schedules_dir.join(schedule_id.to_string());
                 let spec_path = sched_dir.join("spec.json");
                 if !sched_dir.exists() || !spec_path.exists() {
+                    log_warn!("Schedule run rejected: Schedule #{} does not exist", schedule_id);
                     Response::Error { message: format!("Schedule {} does not exist", schedule_id) }
                 } else {
                     let spec_str = match fs::read_to_string(&spec_path) {
                         Ok(s) => s,
                         Err(e) => {
+                            log_error!("Cannot read schedule #{}: {}", schedule_id, e);
                             let resp = Response::Error { message: format!("Cannot read schedule {}: {}", schedule_id, e) };
                             if let Ok(resp_str) = serde_json::to_string(&resp) {
                                 let _ = writer.write_all(format!("{}\n", resp_str).as_bytes()).await;
@@ -924,6 +991,7 @@ async fn handle_connection(
                         let job_id = get_next_job_id(&spool_dir);
                         let job_dir = spool_dir.join(job_id.to_string());
                         if let Err(e) = fs::create_dir_all(&job_dir) {
+                            log_error!("Failed to create job directory for job #{}: {}", job_id, e);
                             Response::Error { message: format!("Failed to create job directory: {}", e) }
                         } else {
                             let job_spec = JobSpec {
@@ -935,17 +1003,19 @@ async fn handle_connection(
                             };
                             let _ = fs::write(job_dir.join("spec.json"), serde_json::to_string(&job_spec).unwrap());
                             let _ = fs::write(job_dir.join("status"), "queued");
-                            let cmd_str = format!("{} {}", job_spec.cmd, job_spec.args.join(" "));
-                            let _ = fs::write(job_dir.join("cmd"), cmd_str);
+                            let cmd_str = format!("{} {}", job_spec.cmd, job_spec.args.join(" ")).trim().to_string();
+                            let _ = fs::write(job_dir.join("cmd"), &cmd_str);
 
                             let now_str = chrono::Local::now().to_rfc3339();
                             let _ = fs::write(sched_dir.join("last_run"), &now_str);
                             let _ = fs::write(sched_dir.join("last_job_id"), job_id.to_string());
 
+                            log_info!("Schedule #{} manually triggered: queued job #{} ('{}')", schedule_id, job_id, cmd_str);
                             let _ = tx.send(()).await;
                             Response::Queued { job_id }
                         }
                     } else {
+                        log_error!("Failed to parse schedule #{}", schedule_id);
                         Response::Error { message: format!("Failed to parse schedule {}", schedule_id) }
                     }
                 }
@@ -972,21 +1042,27 @@ fn run_worker(job_id: usize) {
 
     let my_pid = std::process::id();
     if let Err(e) = fs::write(&worker_pid_path, my_pid.to_string()) {
-        let _ = fs::write(&status_path, format!("failed: cannot write worker_pid: {}", e));
+        let err_msg = format!("failed: cannot write worker_pid: {}", e);
+        log_error!("Job #{} worker error: {}", job_id, err_msg);
+        let _ = fs::write(&status_path, err_msg);
         return;
     }
 
     let spec_str = match fs::read_to_string(&spec_path) {
         Ok(s) => s,
         Err(e) => {
-            let _ = fs::write(&status_path, format!("failed: cannot read spec.json: {}", e));
+            let err_msg = format!("failed: cannot read spec.json: {}", e);
+            log_error!("Job #{} worker error: {}", job_id, err_msg);
+            let _ = fs::write(&status_path, err_msg);
             return;
         }
     };
     let spec: JobSpec = match serde_json::from_str(&spec_str) {
         Ok(s) => s,
         Err(e) => {
-            let _ = fs::write(&status_path, format!("failed: cannot parse spec.json: {}", e));
+            let err_msg = format!("failed: cannot parse spec.json: {}", e);
+            log_error!("Job #{} worker error: {}", job_id, err_msg);
+            let _ = fs::write(&status_path, err_msg);
             return;
         }
     };
@@ -994,14 +1070,18 @@ fn run_worker(job_id: usize) {
     let stdout_file = match fs::File::create(&stdout_path) {
         Ok(f) => f,
         Err(e) => {
-            let _ = fs::write(&status_path, format!("failed: cannot create stdout file: {}", e));
+            let err_msg = format!("failed: cannot create stdout file: {}", e);
+            log_error!("Job #{} worker error: {}", job_id, err_msg);
+            let _ = fs::write(&status_path, err_msg);
             return;
         }
     };
     let stderr_file = match fs::File::create(&stderr_path) {
         Ok(f) => f,
         Err(e) => {
-            let _ = fs::write(&status_path, format!("failed: cannot create stderr file: {}", e));
+            let err_msg = format!("failed: cannot create stderr file: {}", e);
+            log_error!("Job #{} worker error: {}", job_id, err_msg);
+            let _ = fs::write(&status_path, err_msg);
             return;
         }
     };
@@ -1019,21 +1099,29 @@ fn run_worker(job_id: usize) {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            let _ = fs::write(&status_path, format!("failed: {}", e));
+            let err_msg = format!("failed: {}", e);
+            log_error!("Job #{} failed to spawn command '{}': {}", job_id, spec.cmd, e);
+            let _ = fs::write(&status_path, err_msg);
             let _ = fs::remove_file(&worker_pid_path);
             return;
         }
     };
 
     let cmd_pid = child.id();
+    log_info!("Job #{} process started (PID: {})", job_id, cmd_pid);
+
     if let Err(e) = fs::write(&pid_path, cmd_pid.to_string()) {
-        let _ = fs::write(&status_path, format!("failed: cannot write pid file: {}", e));
+        let err_msg = format!("failed: cannot write pid file: {}", e);
+        log_error!("Job #{} worker error: {}", job_id, err_msg);
+        let _ = fs::write(&status_path, err_msg);
         let _ = child.kill();
         let _ = fs::remove_file(&worker_pid_path);
         return;
     }
 
-    if let Err(_e) = fs::write(&status_path, "running") {
+    if let Err(e) = fs::write(&status_path, "running") {
+        let err_msg = format!("failed: cannot write status running: {}", e);
+        log_error!("Job #{} worker error: {}", job_id, err_msg);
         let _ = child.kill();
         let _ = fs::remove_file(&worker_pid_path);
         let _ = fs::remove_file(&pid_path);
@@ -1046,7 +1134,9 @@ fn run_worker(job_id: usize) {
     let exit_status = match child.wait() {
         Ok(s) => s,
         Err(e) => {
-            let _ = fs::write(&status_path, format!("failed: waiting on process failed: {}", e));
+            let err_msg = format!("failed: waiting on process failed: {}", e);
+            log_error!("Job #{} worker error: {}", job_id, err_msg);
+            let _ = fs::write(&status_path, err_msg);
             let end_time = chrono::Local::now().to_rfc3339();
             let _ = fs::write(job_dir.join("end_time"), &end_time);
             let _ = fs::remove_file(&worker_pid_path);
@@ -1077,6 +1167,8 @@ fn run_worker(job_id: usize) {
     } else {
         0
     };
+
+    log_info!("Job #{} finished: {} (duration: {}s)", job_id, status_str, duration_secs);
 
     let should_notify = match spec.notify {
         Some(explicit) => explicit,

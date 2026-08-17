@@ -201,10 +201,22 @@ The boolean flag to enable or disable desktop notifications globally (default is
 .TP
 .B min_notify_duration_secs
 Minimum execution duration in seconds required for a completed command to trigger a desktop notification (default is 10).
+.TP
+.B max_log_files
+The maximum number of rotated log files to retain in the log directory (default is 5).
+.TP
+.B max_log_file_age
+The maximum age threshold of the log file before triggering rotation (e.g., \fB"1w"\fR, \fB"24h"\fR, \fB"30m"\fR, \fB"1y"\fR).
+.TP
+.B max_log_file_size
+The maximum file size threshold of the log file before triggering rotation (e.g., \fB"200mb"\fR, \fB"500kb"\fR, \fB"1gb"\fR).
 .SH FILES
 .TP
 .I ~/.q/
 Directory containing daemon runtime state.
+.TP
+.I ~/.q/qdaemon.log
+Log file for the background daemon, rotated to \fIqdaemon.log.1\fR, \fIqdaemon.log.2\fR, etc.
 .TP
 .I ~/.q/q.sock
 Unix domain socket used for client-daemon communication.
