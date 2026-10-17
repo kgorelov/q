@@ -4,4 +4,6 @@ debian/q-cli
 debian/debhelper-build-stamp
 debian/files
 debian/q-cli.substvars
-
+/dist
+/package
+/package_*

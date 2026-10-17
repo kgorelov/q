@@ -24,15 +24,17 @@ max_log_file_size = "300b"
     .unwrap();
 
     let target_dir = std::env::current_dir().unwrap().join("target").join("release");
-    let qdaemon_bin = target_dir.join("qdaemon");
-    let q_bin = target_dir.join("q");
+    let exe_suffix = std::env::consts::EXE_SUFFIX;
+    let qdaemon_bin = target_dir.join(format!("qdaemon{}", exe_suffix));
+    let q_bin = target_dir.join(format!("q{}", exe_suffix));
 
     assert!(qdaemon_bin.exists(), "qdaemon binary not found");
     assert!(q_bin.exists(), "q binary not found");
 
-    // Launch daemon with HOME set to test_dir
+    // Launch daemon with HOME / USERPROFILE set to test_dir
     let mut daemon_child = Command::new(&qdaemon_bin)
         .env("HOME", &test_dir)
+        .env("USERPROFILE", &test_dir)
         .spawn()
         .expect("Failed to start qdaemon");
 
@@ -50,6 +52,7 @@ max_log_file_size = "300b"
     // Queue a job via `q`
     let output = Command::new(&q_bin)
         .env("HOME", &test_dir)
+        .env("USERPROFILE", &test_dir)
         .arg("echo")
         .arg("Hello Daemon Log")
         .output()
@@ -60,6 +63,7 @@ max_log_file_size = "300b"
     // Schedule a job via `q`
     let sched_output = Command::new(&q_bin)
         .env("HOME", &test_dir)
+        .env("USERPROFILE", &test_dir)
         .arg("--schedule")
         .arg("every 1 hour")
         .arg("echo")
@@ -73,6 +77,7 @@ max_log_file_size = "300b"
     for i in 0..8 {
         let _ = Command::new(&q_bin)
             .env("HOME", &test_dir)
+            .env("USERPROFILE", &test_dir)
             .arg("echo")
             .arg(format!("Logging job payload message number {}", i))
             .output();

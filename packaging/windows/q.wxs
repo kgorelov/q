@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="q"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="Kirill Gorelov"
+           UpgradeCode="D4E5F6A7-1B2C-4D3E-9F8A-7B6C5D4E3F2A">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Platform="x64"
+             Description="Command Line Queue, Execution and Scheduling Utility"
+             Comments="q $(var.Version) installer" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPHELPLINK" Value="https://github.com/kgorelov/q" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/kgorelov/q" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="q" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="PathEnvComponent" Guid="3F2A1B4C-5D6E-4F7A-8B9C-0D1E2F3A4B5C" Win64="yes">
+        <Environment Id="PATH"
+                     Name="PATH"
+                     Value="[INSTALLFOLDER]"
+                     Permanent="no"
+                     Part="last"
+                     Action="set"
+                     System="yes" />
+        <RegistryValue Root="HKLM" Key="Software\q" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainApplication" Title="q" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="PathEnvComponent" />
+    </Feature>
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <UIRef Id="WixUI_Minimal" />
+  </Product>
+</Wix>
