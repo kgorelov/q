@@ -120,6 +120,11 @@ impl Default for Config {
 }
 
 pub fn get_q_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        if !home.is_empty() {
+            return PathBuf::from(home).join(".q");
+        }
+    }
     dirs::home_dir()
         .map(|p| p.join(".q"))
         .unwrap_or_else(|| PathBuf::from(".q"))
@@ -219,9 +224,13 @@ impl ConnectionListener {
 }
 
 pub fn get_config_path() -> PathBuf {
+    let q_conf = get_q_dir().join("q.conf");
+    if q_conf.exists() {
+        return q_conf;
+    }
     dirs::config_dir()
         .map(|p| p.join("q").join("q.conf"))
-        .unwrap_or_else(|| get_q_dir().join("q.conf"))
+        .unwrap_or(q_conf)
 }
 
 pub fn load_config() -> Config {

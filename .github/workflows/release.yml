@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - 'release/**'
+      - 'release-*'
+    tags:
+      - '*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Test (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: windows-latest
+            platform: windows-x64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build application
+        run: cargo build --release
+
+      - name: Run test suite
+        run: cargo test --release
+
+      - name: Package Linux
+        if: matrix.platform == 'linux-x64'
+        shell: bash
+        run: |
+          mkdir -p dist package/q
+          TAG_NAME="${GITHUB_REF_NAME//\//-}"
+
+          cp target/release/q package/q/
+          cp target/release/qdaemon package/q/
+          ln -sf q package/q/schedule
+          cp q.1 package/q/
+          cp README.md package/q/
+
+          tar -czvf "dist/q-${TAG_NAME}-linux-x86_64.tar.gz" -C package q
+
+      - name: Install Windows packaging tools
+        if: matrix.platform == 'windows-x64'
+        shell: bash
+        run: |
+          choco install innosetup wixtoolset -y
+          echo "C:\Program Files (x86)\Inno Setup 6" >> "$GITHUB_PATH"
+          echo "C:\Program Files (x86)\WiX Toolset v3.11\bin" >> "$GITHUB_PATH"
+
+      - name: Package Windows
+        if: matrix.platform == 'windows-x64'
+        shell: bash
+        run: |
+          chmod +x scripts/package_windows.sh
+          ./scripts/package_windows.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: q-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: q-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate Checksums
+        shell: bash
+        run: |
+          cd dist
+          sha512sum * > SHA512SUMS.txt
+          cat SHA512SUMS.txt
+
+      - name: Inspect release assets
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
