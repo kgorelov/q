@@ -238,14 +238,14 @@ pub fn rotate_logs(log_path: &Path, max_log_files: usize) -> std::io::Result<()>
 
 pub struct DaemonLogger {
     log_path: PathBuf,
-    file: Mutex<Option<File>>,
+    lock: Mutex<()>,
 }
 
 impl DaemonLogger {
     pub fn new(log_path: PathBuf) -> Self {
         Self {
             log_path,
-            file: Mutex::new(None),
+            lock: Mutex::new(()),
         }
     }
 
@@ -254,7 +254,7 @@ impl DaemonLogger {
         let timestamp = now.format("%Y-%m-%d %H:%M:%S").to_string();
         let line = format!("{} [{}] {}\n", timestamp, level.as_str(), message);
 
-        let mut file_guard = match self.file.lock() {
+        let _guard = match self.lock.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
@@ -264,37 +264,24 @@ impl DaemonLogger {
         let max_size = config.parsed_max_log_file_size_bytes();
 
         if should_rotate(&self.log_path, max_age, max_size) {
-            // Close current file
-            *file_guard = None;
             let _ = rotate_logs(&self.log_path, config.max_log_files);
         }
 
-        if file_guard.is_none() {
-            if let Some(parent) = self.log_path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            if let Ok(f) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.log_path)
-            {
-                *file_guard = Some(f);
-            }
+        if let Some(parent) = self.log_path.parent() {
+            let _ = fs::create_dir_all(parent);
         }
-
-        if let Some(f) = file_guard.as_mut() {
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+        {
             let _ = f.write_all(line.as_bytes());
             let _ = f.flush();
-        }
-
-        #[cfg(windows)]
-        {
-            *file_guard = None;
         }
     }
 
     pub fn check_and_rotate(&self, config: &Config) {
-        let mut file_guard = match self.file.lock() {
+        let _guard = match self.lock.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
@@ -303,7 +290,6 @@ impl DaemonLogger {
         let max_size = config.parsed_max_log_file_size_bytes();
 
         if should_rotate(&self.log_path, max_age, max_size) {
-            *file_guard = None;
             let _ = rotate_logs(&self.log_path, config.max_log_files);
         }
     }

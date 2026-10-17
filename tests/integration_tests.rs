@@ -18,7 +18,7 @@ max_parallel_jobs = 2
 max_completed_jobs_to_keep = 10
 enable_notifications = false
 max_log_files = 10
-max_log_file_size = "400b"
+max_log_file_size = "1500b"
 "#,
     )
     .unwrap();
