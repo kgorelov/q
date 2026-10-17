@@ -286,6 +286,11 @@ impl DaemonLogger {
             let _ = f.write_all(line.as_bytes());
             let _ = f.flush();
         }
+
+        #[cfg(windows)]
+        {
+            *file_guard = None;
+        }
     }
 
     pub fn check_and_rotate(&self, config: &Config) {

@@ -17,8 +17,8 @@ fn test_daemon_logging_and_rotation_integration() {
 max_parallel_jobs = 2
 max_completed_jobs_to_keep = 10
 enable_notifications = false
-max_log_files = 2
-max_log_file_size = "300b"
+max_log_files = 5
+max_log_file_size = "800b"
 "#,
     )
     .unwrap();
@@ -50,10 +50,16 @@ max_log_file_size = "300b"
     assert!(log_path.exists(), "qdaemon.log was not created");
 
     // Queue a job via `q`
+    #[cfg(windows)]
+    let (test_cmd, test_prefix_args): (&str, &[&str]) = ("cmd", &["/C", "echo"]);
+    #[cfg(not(windows))]
+    let (test_cmd, test_prefix_args): (&str, &[&str]) = ("echo", &[]);
+
     let output = Command::new(&q_bin)
         .env("HOME", &test_dir)
         .env("USERPROFILE", &test_dir)
-        .arg("echo")
+        .arg(test_cmd)
+        .args(test_prefix_args)
         .arg("Hello Daemon Log")
         .output()
         .expect("Failed to run q");
@@ -66,19 +72,21 @@ max_log_file_size = "300b"
         .env("USERPROFILE", &test_dir)
         .arg("--schedule")
         .arg("every 1 hour")
-        .arg("echo")
+        .arg(test_cmd)
+        .args(test_prefix_args)
         .arg("scheduled task")
         .output()
         .expect("Failed to schedule job");
 
     assert!(sched_output.status.success());
 
-    // Queue enough jobs to cause log rotation (over 300 bytes)
+    // Queue enough jobs to cause log rotation (over 800 bytes)
     for i in 0..8 {
         let _ = Command::new(&q_bin)
             .env("HOME", &test_dir)
             .env("USERPROFILE", &test_dir)
-            .arg("echo")
+            .arg(test_cmd)
+            .args(test_prefix_args)
             .arg(format!("Logging job payload message number {}", i))
             .output();
         std::thread::sleep(Duration::from_millis(100));
@@ -92,17 +100,21 @@ max_log_file_size = "300b"
     let rot1_path = q_dir.join("qdaemon.log.1");
 
     assert!(
-        rot1_path.exists() || log_content.contains("queued"),
-        "Log rotation or logging should have occurred"
+        rot1_path.exists(),
+        "Log rotation (qdaemon.log.1) should have occurred"
     );
 
-    let rot1_content = if rot1_path.exists() {
-        fs::read_to_string(&rot1_path).unwrap_or_default()
-    } else {
-        String::new()
-    };
+    let mut all_logs = log_content;
+    for idx in 1..=5 {
+        let rot_path = q_dir.join(format!("qdaemon.log.{}", idx));
+        if rot_path.exists() {
+            if let Ok(content) = fs::read_to_string(&rot_path) {
+                all_logs.push('\n');
+                all_logs.push_str(&content);
+            }
+        }
+    }
 
-    let all_logs = format!("{}\n{}", rot1_content, log_content);
     assert!(all_logs.contains("qdaemon"), "Log should contain daemon startup");
     assert!(all_logs.contains("Job #1"), "Log should contain Job #1");
     assert!(all_logs.contains("Schedule #1"), "Log should contain Schedule #1");
